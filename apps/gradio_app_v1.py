@@ -38,7 +38,10 @@ from scripts.submit_user_testing_session import (  # noqa: E402
     submit_session,
 )
 
-CORPUS_PATH = PROJECT_ROOT / "data/chunks/source_chunks_v1_combined.jsonl"
+DEFAULT_CORPUS_PATH = PROJECT_ROOT / "data/chunks/source_chunks_v1_combined.jsonl"
+CORPUS_PATH = Path(
+    os.environ.get("SPHINX_CORPUS_PATH", str(DEFAULT_CORPUS_PATH))
+).expanduser()
 MARKDOWN_RENDERER = MarkdownIt("commonmark", {"html": False}).enable("table")
 CODE_COPY_JS = """
 element.addEventListener("click", (event) => {
