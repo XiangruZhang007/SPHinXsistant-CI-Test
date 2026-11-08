@@ -17,6 +17,11 @@ on:
         required: true
         default: dceacd4e509a8592b802cf44bb2885bea7ddfdb3
         type: string
+      q1_transport_config:
+        description: Optional reviewed Q1 transport config in the checked-out configs/ directory
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -33,6 +38,7 @@ jobs:
       BASELINE_KEY: ${{ inputs.baseline_key }}
       SYS_REVISION: ${{ inputs.sys_revision }}
       SIM_REVISION: ${{ inputs.sim_revision }}
+      Q1_TRANSPORT_CONFIG: ${{ inputs.q1_transport_config }}
     steps:
       - name: Check out trusted workflow implementation
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # verified v4
@@ -49,6 +55,12 @@ jobs:
           --key "$BASELINE_KEY"
           --sys-revision "$SYS_REVISION" --sim-revision "$SIM_REVISION"
           --output "$RUNNER_TEMP/p5a"
+      - name: Restore optional pinned Q1 diagnostic inputs
+        if: env.Q1_TRANSPORT_CONFIG != ''
+        run: >-
+          python -B scripts/prepare_q1_inputs.py
+          --config "$Q1_TRANSPORT_CONFIG" --runner-temp "$RUNNER_TEMP"
+          --output "$RUNNER_TEMP/p5a/q1-transport.json"
       - name: Prepare pinned extraction runtime
         run: |
           git -c credential.helper= clone --no-checkout https://github.com/Consiliency/treesitter-chunker.git tools/treesitter-chunker
@@ -57,10 +69,16 @@ jobs:
           tools/treesitter-chunker/.venv/bin/python -m pip install -r configs/ci_v2_parser_requirements.txt
           tools/treesitter-chunker/.venv/bin/python -m pip install -c configs/ci_v2_parser_requirements.txt -e tools/treesitter-chunker
       - name: Restore, build and evaluate research candidate
-        run: >-
-          tools/treesitter-chunker/.venv/bin/python -B scripts/ci_v2_schema2_research.py execute-plan
-          --plan "$RUNNER_TEMP/p5a/plan.json"
-          --work "$RUNNER_TEMP/p5a-work" --output "$RUNNER_TEMP/p5a/run"
+        run: |
+          q1_args=()
+          if [[ -n "$Q1_TRANSPORT_CONFIG" ]]; then
+            q1_inputs=$(python -B -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs_path"])' "$RUNNER_TEMP/p5a/q1-transport.json")
+            q1_sha=$(python -B -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs_sha256"])' "$RUNNER_TEMP/p5a/q1-transport.json")
+            q1_args=(--q1-inputs "$q1_inputs" --q1-inputs-sha256 "$q1_sha")
+          fi
+          tools/treesitter-chunker/.venv/bin/python -B scripts/ci_v2_schema2_research.py execute-plan \
+          --plan "$RUNNER_TEMP/p5a/plan.json" \
+          --work "$RUNNER_TEMP/p5a-work" --output "$RUNNER_TEMP/p5a/run" "${q1_args[@]}"
       - name: Upload candidate evidence or explicit failure report
         if: always()
         id: evidence
