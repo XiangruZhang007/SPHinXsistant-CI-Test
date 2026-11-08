@@ -209,8 +209,10 @@ def verify_run(project, root):
     return {'status': 'VERIFIED', 'candidate_id': built['candidate_id'], 'restored_combinations_replayed': 256, **c.RESTRICTIONS}
 
 
-def execute_plan(project, plan_path, work, output):
+def execute_plan(project, plan_path, work, output, *, q1_inputs=None, q1_sha=None):
     """Hosted-capable wiring, intentionally not executed during P5A.2."""
+    c.need((q1_inputs is None) == (q1_sha is None), 'UNSAFE_INPUT',
+           'q1_inputs and q1_sha must be provided together')
     project, work, output = Path(project), Path(work), Path(output)
     planned = read_json(plan_path); registry = read_json(trust.REGISTRY)
     current = plan(project, registry, planned['key'], planned['upstreams'])
@@ -230,6 +232,6 @@ def execute_plan(project, plan_path, work, output):
             subprocess.run(['git', '-C', str(dest), 'checkout', '--detach', revisions[repo]], check=True)
     result = run_local(project, work / 'parent.tar.gz', work / 'base-source', work / 'target-source', output,
         ref, entry['expected_reference_sha256'], checked_file(project, entry['build_policy_path']),
-        entry['build_policy_sha256'], work / 'parent-rows.json')
+        entry['build_policy_sha256'], work / 'parent-rows.json', q1_inputs=q1_inputs, q1_sha=q1_sha)
     c.package_candidate(output, output.parent / 'candidate.tar.gz')
     return result

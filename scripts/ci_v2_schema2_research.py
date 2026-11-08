@@ -21,6 +21,8 @@ def main(argv=None):
     plan.add_argument('--output', type=Path, required=True)
     execute = commands.add_parser('execute-plan')
     for name in ('plan', 'work', 'output'): execute.add_argument('--' + name, type=Path, required=True)
+    execute.add_argument('--q1-inputs', type=Path)
+    execute.add_argument('--q1-inputs-sha256')
     local = commands.add_parser('local')
     for name in ('archive', 'base-source', 'target-source', 'output', 'reference', 'policy', 'parent-rows'):
         local.add_argument('--' + name, type=Path, required=True)
@@ -33,12 +35,16 @@ def main(argv=None):
     for name in ('archive', 'destination', 'reference'): restore.add_argument('--' + name, type=Path, required=True)
     restore.add_argument('--expected-reference-sha256', required=True)
     a = parser.parse_args(argv)
+    if a.command == 'execute-plan' and ((a.q1_inputs is None) != (a.q1_inputs_sha256 is None)):
+        parser.error('--q1-inputs and --q1-inputs-sha256 must be provided together')
     try:
         if a.command == 'plan':
             result = w.plan(P, c.read(t.REGISTRY), a.key, {'SPHinXsys': a.sys_revision, 'SPHinXsim': a.sim_revision})
             a.output.mkdir(exist_ok=False, parents=True)
             c.write(a.output / 'plan.json', result)
-        elif a.command == 'execute-plan': result = w.execute_plan(P, a.plan, a.work, a.output)
+        elif a.command == 'execute-plan':
+            result = w.execute_plan(P, a.plan, a.work, a.output,
+                q1_inputs=a.q1_inputs, q1_sha=a.q1_inputs_sha256)
         elif a.command == 'verify-run': result = w.verify_run(P, a.root)
         elif a.command == 'restore': result = t.restore(P, a.archive, a.destination, c.read(a.reference), a.expected_reference_sha256)
         else:

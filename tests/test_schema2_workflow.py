@@ -1,5 +1,7 @@
 """Manual workflow gates and inspection of a genuine archived integration run."""
 import copy
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -7,8 +9,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from scripts import ci_v2_schema2_research as cli
 from src import ci_v2_research as c, schema2_workflow as w, trusted_snapshot as t
 from src.corpus_snapshot import digest, file_digest, read_json, write_json
 
@@ -97,6 +101,171 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertEqual(status['status'], 'Q1_NOT_QUALIFIED_FOR_VERSION_PAIR')
             self.assertFalse(report['automatic_research_approval'])
             self.assertFalse(report['blocking'])
+
+
+class ExecutePlanQ1Tests(unittest.TestCase):
+    """Parameter wiring only; transport, Git and corpus work never execute."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.work = self.root / 'work'
+        self.output = self.root / 'output'
+        self.plan_path = self.root / 'plan.json'
+        self.registry_path = self.root / 'registry.json'
+        self.inputs = self.root / 'q1-inputs.json'
+        self.sha = 'a' * 64
+        self.planned = {'key': 'fixture', 'upstreams': {'SPHinXsys': 'a' * 40, 'SPHinXsim': 'b' * 40}}
+        self.entry = {'reference': {'storage': {}, 'transport_sha256': 'b' * 64,
+            'parent_rows_storage': {}, 'parent_rows_sha256': 'c' * 64,
+            'upstreams': self.planned['upstreams']}, 'expected_reference_sha256': 'd' * 64,
+            'build_policy_path': 'policy.json', 'build_policy_sha256': 'e' * 64}
+        write_json(self.plan_path, self.planned)
+        write_json(self.registry_path, {'baselines': {'fixture': self.entry}})
+        write_json(self.root / 'policy.json', {})
+        self.argv = ['execute-plan', '--plan', str(self.plan_path), '--work', str(self.work),
+                     '--output', str(self.output)]
+
+    def test_cli_parses_and_forwards_optional_pair_and_default(self):
+        for extra, expected in [([], {'q1_inputs': None, 'q1_sha': None}),
+                (['--q1-inputs', str(self.inputs), '--q1-inputs-sha256', self.sha],
+                 {'q1_inputs': self.inputs, 'q1_sha': self.sha})]:
+            with self.subTest(extra=extra), patch.object(w, 'execute_plan', return_value=c.RESTRICTIONS) as execute, \
+                    redirect_stdout(io.StringIO()) as stdout:
+                self.assertEqual(cli.main(self.argv + extra), 0)
+                execute.assert_called_once_with(P, self.plan_path, self.work, self.output, **expected)
+                self.assertEqual(json.loads(stdout.getvalue())['production_promotion'], 'NOT_AUTHORIZED')
+
+    def test_cli_rejects_unpaired_options_before_execution(self):
+        for extra in (['--q1-inputs', str(self.inputs)], ['--q1-inputs-sha256', self.sha]):
+            with self.subTest(extra=extra), patch.object(w, 'execute_plan') as execute, \
+                    redirect_stderr(io.StringIO()) as stderr, self.assertRaises(SystemExit) as caught:
+                cli.main(self.argv + extra)
+            self.assertEqual(caught.exception.code, 2)
+            self.assertIn('must be provided together', stderr.getvalue())
+            execute.assert_not_called()
+            self.assertFalse(self.work.exists())
+            self.assertFalse(self.output.exists())
+
+    def execute_fixture(self, **kwargs):
+        stack = self.enterContext(ExitStack())
+        stack.enter_context(patch.object(t, 'REGISTRY', self.registry_path))
+        self.plan_check = stack.enter_context(patch.object(w, 'plan', return_value=self.planned))
+        stack.enter_context(patch.object(c, 'frozen_runtime'))
+        stack.enter_context(patch.object(w.shutil, 'disk_usage', return_value=SimpleNamespace(free=9 * 1024**3)))
+        self.download = stack.enter_context(patch.object(t, 'download'))
+        stack.enter_context(patch.object(c, 'SOURCES', {r: 'https://example.invalid/' + r
+                                                      for r in self.planned['upstreams']}))
+        self.git = stack.enter_context(patch.object(w.subprocess, 'run'))
+        self.local = stack.enter_context(patch.object(w, 'run_local', return_value=c.RESTRICTIONS))
+        self.package = stack.enter_context(patch.object(c, 'package_candidate'))
+        return w.execute_plan(self.root, self.plan_path, self.work, self.output, **kwargs)
+
+    def test_execute_plan_forwards_q1_pair_to_existing_local_path(self):
+        self.assertEqual(self.execute_fixture(q1_inputs=self.inputs, q1_sha=self.sha), c.RESTRICTIONS)
+        self.assertEqual(self.local.call_args.kwargs, {'q1_inputs': self.inputs, 'q1_sha': self.sha})
+        self.assertEqual(self.local.call_args.args[-1], self.work / 'parent-rows.json')
+        self.assertEqual(self.download.call_count, 2)
+        self.package.assert_called_once_with(self.output, self.output.parent / 'candidate.tar.gz')
+
+    def test_execute_plan_without_q1_preserves_defaults(self):
+        self.assertEqual(self.execute_fixture(), c.RESTRICTIONS)
+        self.assertEqual(self.local.call_args.kwargs, {'q1_inputs': None, 'q1_sha': None})
+
+    def test_direct_execute_plan_rejects_unpaired_options_before_side_effects(self):
+        for kwargs in ({'q1_inputs': self.inputs}, {'q1_sha': self.sha}):
+            with self.subTest(kwargs=kwargs), patch.object(w, 'plan') as plan, \
+                    patch.object(t, 'download') as download, self.assertRaises(c.GateError) as caught:
+                w.execute_plan(P, self.plan_path, self.work, self.output, **kwargs)
+            self.assertEqual(caught.exception.status, 'UNSAFE_INPUT')
+            plan.assert_not_called()
+            download.assert_not_called()
+            self.assertFalse(self.work.exists())
+
+    def test_mandatory_plan_failure_is_not_suppressed_by_q1(self):
+        with patch.object(t, 'REGISTRY', self.registry_path), \
+                patch.object(w, 'plan', side_effect=c.GateError('INVALID_REFERENCE', 'Scope changed')), \
+                patch.object(t, 'download') as download, self.assertRaises(c.GateError) as caught:
+            w.execute_plan(P, self.plan_path, self.work, self.output, q1_inputs=self.inputs, q1_sha=self.sha)
+        self.assertEqual(caught.exception.status, 'INVALID_REFERENCE')
+        download.assert_not_called()
+        self.assertFalse(self.work.exists())
+
+    def test_mandatory_local_failures_retain_cli_status_and_cannot_package(self):
+        for status in ('AUTHORIZATION_FAILED', 'RETRIEVAL_EXECUTION_FAILED'):
+            with self.subTest(status=status), patch.object(w, 'run_local',
+                    side_effect=c.GateError(status, 'Mandatory failure')), \
+                    patch.object(c, 'package_candidate') as package, \
+                    patch.object(cli, 'P', self.root), \
+                    patch.object(t, 'REGISTRY', self.registry_path), \
+                    patch.object(w, 'plan', return_value=self.planned), patch.object(c, 'frozen_runtime'), \
+                    patch.object(w.shutil, 'disk_usage', return_value=SimpleNamespace(free=9 * 1024**3)), \
+                    patch.object(t, 'download'), patch.object(w.subprocess, 'run'), \
+                    redirect_stdout(io.StringIO()) as stdout:
+                # New paths avoid reusing the previous subcase's temporary output.
+                args = ['execute-plan', '--plan', str(self.plan_path), '--work', str(self.root / status),
+                        '--output', str(self.root / (status + '-output')), '--q1-inputs', str(self.inputs),
+                        '--q1-inputs-sha256', self.sha]
+                self.assertEqual(cli.main(args), 2)
+                result = json.loads(stdout.getvalue())
+                self.assertEqual(result['status'], status)
+                self.assertEqual(result['production_promotion'], 'NOT_AUTHORIZED')
+                self.assertFalse(result['automatic_research_approval'])
+                package.assert_not_called()
+
+    def diagnostic_fixture(self):
+        criterion = {'kind': 'line_range', 'path': 'repos/SPHinXsim/docs/unit.md',
+                     'role': 'documentation', 'range': [1, 1]}
+        spec = {'questions': [{'id': 'unit', 'evidence_mode': 'ALL_OF', 'requirements': [criterion]}]}
+        row = {'id': 'unit', 'mode': 'combined', 'strict': {'hit_at_5': False, 'hit_at_10': False},
+               'evidence_available': False, 'top_10': []}
+        return spec, row
+
+    def test_real_q1_loader_rejects_invalid_inputs_as_nonblocking_diagnostics(self):
+        spec, row = self.diagnostic_fixture()
+        for name, raw, sha in [('checksum', b'{}', '0' * 64), ('malformed', b'{', None)]:
+            with self.subTest(name=name):
+                source = self.root / (name + '.json')
+                source.write_bytes(raw)
+                output = self.root / (name + '-diagnostic')
+                output.mkdir()
+                status, report = w.diagnostics(P, output, spec, [row], [row], {},
+                    q1_inputs=source, q1_sha=sha or file_digest(source))
+                self.assertEqual(status['status'], 'Q1_NOT_QUALIFIED_FOR_VERSION_PAIR')
+                self.assertTrue(status['reason'])
+                self.assertIn('ATTRIBUTION_UNCERTAIN', report['failures'][0]['supported_attribution'])
+                self.assertFalse(report['blocking'])
+                self.assertEqual(report['production_promotion'], 'NOT_AUTHORIZED')
+
+    def test_existing_qualification_rejects_run_and_archived_row_mismatches(self):
+        from src import version_aware_evidence as q
+        spec, row = self.diagnostic_fixture()
+        base = {'source_state_id': 'base-source', 'package_id': 'parent', 'corpus_sha256': 'base-corpus'}
+        target = {'source_state_id': 'target-source', 'package_id': 'candidate', 'corpus_sha256': 'target-corpus'}
+        possible = {'base': base, 'target': target,
+                    'archived_rows_digests': {'base': digest([row]), 'target': digest([row])}}
+        bindings = {'base_source_state': base['source_state_id'], 'target_source_state': target['source_state_id'],
+                    'parent_id': base['package_id'], 'candidate_id': target['package_id'],
+                    'base_corpus_sha256': base['corpus_sha256'], 'target_corpus_sha256': target['corpus_sha256']}
+        for field in (*bindings, 'archived_rows'):
+            with self.subTest(field=field):
+                report_input = copy.deepcopy(possible)
+                run_bindings = dict(bindings)
+                if field == 'archived_rows': report_input['archived_rows_digests']['target'] = 'wrong'
+                else: run_bindings[field] = 'wrong'
+                output = self.root / field
+                output.mkdir()
+                with patch.object(q, 'generate', return_value=report_input) as generate, \
+                        patch.object(q, 'write_report') as write_report:
+                    status, report = w.diagnostics(P, output, spec, [row], [row], run_bindings,
+                                                  q1_inputs=self.inputs, q1_sha=self.sha)
+                self.assertEqual(status['status'], 'Q1_NOT_QUALIFIED_FOR_VERSION_PAIR')
+                self.assertIn('differ' if field == 'archived_rows' else 'does not bind', status['reason'])
+                self.assertIn('ATTRIBUTION_UNCERTAIN', report['failures'][0]['supported_attribution'])
+                self.assertFalse(report['blocking'])
+                generate.assert_called_once_with(P, self.inputs, self.sha)
+                write_report.assert_not_called()
 
 
 class GenuineIntegrationTests(unittest.TestCase):
