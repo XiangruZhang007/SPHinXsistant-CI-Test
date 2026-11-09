@@ -66,7 +66,10 @@ class GitHub:
         _need(self.executable is not None, 'GITHUB_UNAVAILABLE: gh is not installed')
 
     def _get(self, endpoint, output=None):
-        _need(endpoint.startswith('repos/' + REPOSITORY + '/actions/'), 'Unsupported GitHub endpoint')
+        base = 'repos/' + REPOSITORY
+        _need(endpoint.startswith(base + '/actions/') or endpoint == base
+              or re.fullmatch(re.escape(base) + r'/issues/(?:comments/[1-9][0-9]*|[1-9][0-9]*(?:/comments\?per_page=100&page=[1-9][0-9]*)?)', endpoint),
+              'Unsupported GitHub endpoint')
         command = [self.executable, 'api', '--hostname', 'github.com', '--method', 'GET',
                    '-H', 'Accept: application/vnd.github+json', endpoint]
         try:
@@ -180,12 +183,15 @@ def _write(path, value):
         stream.write('\n')
 
 
-def deliver(repository, run_id, attempt, artifact_name, *, expected_sha256=None, evidence_root=RECEIPTS):
+def deliver(repository, run_id, attempt, artifact_name, *, expected_sha256=None, evidence_root=RECEIPTS,
+            research_review_config=None, research_review_config_sha256=None):
     """No auth/approval overrides. Tests inject gh responses, not production approvals."""
     _need(repository == REPOSITORY, 'Repository is outside the personal-repository allowlist')
     _need(_positive(run_id) and _positive(attempt), 'Run ID and attempt must be positive integers')
     _need(artifact_name == f'ci-v2-research-{run_id}-{attempt}', 'Unexpected Artifact name for attempt')
     _need(expected_sha256 is None or _sha(expected_sha256), 'Malformed expected transport SHA-256')
+    _need((research_review_config is None) == (research_review_config_sha256 is None),
+          'Research review configuration and its independent SHA-256 must be supplied together')
     evidence_root = Path(evidence_root)
     evidence_root.mkdir(parents=True, exist_ok=True)
     receipt = Path(tempfile.mkdtemp(prefix='github-delivery-' + datetime.now(timezone.utc)
@@ -216,6 +222,11 @@ def deliver(repository, run_id, attempt, artifact_name, *, expected_sha256=None,
             with redirect_stdout(io.StringIO()):
                 result = integration.run(archive)
             _write(receipt / 'integration-result.json', result)
+            from .research_review import verify
+            review = verify(archive, result, metadata, research_review_config,
+                            research_review_config_sha256, client=client)
+            _write(receipt / 'research-review.json', review)
+            summary['research_review'] = review
             summary.update(decision=result['decision'], p8_decision=result['gate']['decision'],
                            candidate_id=result.get('bindings', {}).get('candidate_id'),
                            corpus_sha256=result.get('bindings', {}).get('corpus_sha256'),
@@ -249,10 +260,13 @@ def main(argv=None):
     parser.add_argument('--attempt', required=True, type=int)
     parser.add_argument('--artifact-name', required=True)
     parser.add_argument('--expected-sha256', help='Independent transport pin, required if GitHub supplies no digest')
+    parser.add_argument('--research-review-config', type=Path, help='Optional independent trust configuration in configs/')
+    parser.add_argument('--research-review-config-sha256', help='Independent checksum of the research trust configuration')
     try:
         args = parser.parse_args(argv)
         result = deliver(args.repository, args.run_id, args.attempt, args.artifact_name,
-                         expected_sha256=args.expected_sha256)
+                         expected_sha256=args.expected_sha256, research_review_config=args.research_review_config,
+                         research_review_config_sha256=args.research_review_config_sha256)
     except (OSError, ValueError) as error:
         result = {'delivery': 'FAILED', 'decision': 'BLOCKED', 'activation': 'DENIED',
                   'gradio_reinitialization': 'NOT_ATTEMPTED', 'production_promotion': 'NOT_AUTHORIZED',
