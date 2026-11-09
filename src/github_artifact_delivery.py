@@ -227,6 +227,7 @@ def deliver(repository, run_id, attempt, artifact_name, *, expected_sha256=None,
                             research_review_config_sha256, client=client)
             _write(receipt / 'research-review.json', review)
             summary['research_review'] = review
+            summary['promotion_policy'] = result['promotion_policy']
             summary.update(decision=result['decision'], p8_decision=result['gate']['decision'],
                            candidate_id=result.get('bindings', {}).get('candidate_id'),
                            corpus_sha256=result.get('bindings', {}).get('corpus_sha256'),

@@ -21,6 +21,7 @@ import sys
 import tempfile
 
 from . import update_eligibility_gate as gate
+from . import candidate_promotion_policy as promotion
 from . import versioned_corpus_storage as storage
 from .corpus_snapshot import _unique, digest, read_json
 from .corpus_switching_test_session import TestWorkspace
@@ -157,11 +158,13 @@ def _reinitialize(workspace, target, initialize=None):
 def _integrate(artifact, workspace):
     with workspace._guard():
         before = workspace.current()
-        decision = gate.evaluate(artifact)  # Existing integrity AND policy checks; never replay.
+        policy = promotion.evaluate(artifact)  # Reuses the unchanged P8; never replay.
+        decision = policy['p8']
         result = {'decision': 'BLOCKED', 'artifact_integrity': 'FAIL', 'gate': decision,
                   'registration': {'status': 'NOT_ATTEMPTED'}, 'activation': 'DENIED',
                   'gradio_reinitialization': 'NOT_ATTEMPTED', 'test_only': True,
                   'application_running': False, 'production_promotion': 'NOT_AUTHORIZED'}
+        result['promotion_policy'] = policy
         try:
             if decision['evidence_consistency'] != 'VERIFIED_ARCHIVED_BINDINGS':
                 return result
@@ -197,7 +200,7 @@ def _integrate(artifact, workspace):
                 # No current authorization can reach the branch below. A future
                 # trusted P8 implementation, not an input flag/JSON, must decide.
                 if (decision['decision'] != 'ELIGIBLE' or decision.get('gate_mode') == 'BLOCKING_ONLY'
-                        or decision['reasons']):
+                        or decision['reasons'] or policy['final_eligibility'] != 'ELIGIBLE'):
                     return result
                 if before['version'] is None:
                     parent = evidence.json('parent/manifest.json')
