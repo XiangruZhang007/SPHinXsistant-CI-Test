@@ -31,6 +31,7 @@ def main(argv=None):
     local.add_argument('--q1-inputs-sha256')
     verify = commands.add_parser('verify-run')
     verify.add_argument('--root', type=Path, required=True)
+    verify.add_argument('--expected-reference-sha256')
     restore = commands.add_parser('restore')
     for name in ('archive', 'destination', 'reference'): restore.add_argument('--' + name, type=Path, required=True)
     restore.add_argument('--expected-reference-sha256', required=True)
@@ -54,7 +55,8 @@ def main(argv=None):
         elif a.command == 'execute-plan':
             result = w.execute_plan(P, a.plan, a.work, a.output,
                 q1_inputs=a.q1_inputs, q1_sha=a.q1_inputs_sha256)
-        elif a.command == 'verify-run': result = w.verify_run(P, a.root)
+        elif a.command == 'verify-run':
+            result = w.verify_run(P, a.root, expected_ref_sha=a.expected_reference_sha256)
         elif a.command == 'restore': result = t.restore(P, a.archive, a.destination, c.read(a.reference), a.expected_reference_sha256)
         else:
             result = w.run_local(P, a.archive, a.base_source, a.target_source, a.output, c.read(a.reference),

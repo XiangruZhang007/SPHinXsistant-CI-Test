@@ -6,10 +6,11 @@ import subprocess
 
 from . import ci_v2_research as c, trusted_snapshot as trust
 from .corpus_snapshot import checked_file, digest, file_digest, read_json, read_records, write_json
+from .parent_r2_anchor import qualify_parent_anchor
 
 FILES = ('src/schema2_workflow.py', 'src/trusted_snapshot.py', 'src/regression_attribution.py',
          'scripts/ci_v2_schema2_research.py', 'configs/ci_v2_schema2_trusted_baselines.json',
-         'docs/ci_v2_p5a_2_design.md')
+         'docs/ci_v2_p5a_2_design.md', 'src/parent_r2_anchor.py')
 
 
 def plan(project, registry, key, revisions):
@@ -96,7 +97,7 @@ def run_local(project, archive, base_source, target_source, output, ref, expecte
               expected_policy_sha, parent_rows_path, *, q1_inputs=None, q1_sha=None):
     """Qualified genuine P2 bootstrap path. Research parents fail closed for now."""
     from . import upstream_provenance as u
-    from .approval_evidence import frozen_implementation, rescore, replay, same, BENCHMARK
+    from .approval_evidence import BENCHMARK
     from .research_quality import evaluate_quality
     project, archive, base_source, target_source, output, policy_path, parent_rows_path = map(Path,
         (project, archive, base_source, target_source, output, policy_path, parent_rows_path))
@@ -120,12 +121,9 @@ def run_local(project, archive, base_source, target_source, output, ref, expecte
     shutil.copyfile(project / BENCHMARK, output / 'benchmark.json')
     info = trust.restore(project, archive, output / 'parent', ref, expected_ref_sha)
     write_json(output / 'parent-verification.json', info)
-    spec = frozen_implementation(project, project / BENCHMARK, lock['quality_policy'])
     parent = output / 'parent'; fp = ref['build_fingerprint']
-    parent_rows = read_json(parent_rows_path)
-    parent_metrics = rescore(parent_rows, spec, read_records(parent / 'corpus.jsonl'), read_records(parent / 'components/documentation.jsonl'))
-    c.need(same(replay(spec, parent / 'corpus.jsonl', parent / 'components/documentation.jsonl'), parent_rows),
-           'RETRIEVAL_EXECUTION_FAILED', 'Pinned parent R2 anchor replay differs')
+    anchor = qualify_parent_anchor(project, parent, ref, expected_ref_sha, parent_rows_path)
+    spec, parent_rows, parent_metrics = anchor['spec'], anchor['rows'], anchor['metrics']
     # u.build verifies exact parent source bytes, clean Git roots, commit/tree/
     # selected blobs, public receipts and same/fast-forward relationship proofs.
     built = u.build(project, parent, base_source, target_source, output / 'candidate', policy_path=policy_path,
@@ -135,7 +133,8 @@ def run_local(project, archive, base_source, target_source, output, ref, expecte
     write_json(output / 'parity.json', parity)
     quality = evaluate_quality(project, output / 'candidate', output / 'full', output / 'quality',
         benchmark=project / BENCHMARK, policy=lock['quality_policy'], expected_fingerprint=fp,
-        historical_rows=parent_rows, parent_rows=parent_rows, parent_corpus=parent / 'corpus.jsonl', parent_sources=base_source)
+        historical_rows=anchor['historical_rows'], parent_rows=parent_rows,
+        parent_corpus=parent / 'corpus.jsonl', parent_sources=base_source)
     spec, rows = _verification(project, output / 'candidate', output / 'full', output / 'quality', quality, lock, output / 'execution-verification')
     bindings = {'parent_id': info['node_id'], 'candidate_id': built['candidate_id'],
         'base_source_state': ref['source_state'], 'target_source_state': built['target_source_state'],
@@ -166,13 +165,14 @@ def run_local(project, archive, base_source, target_source, output, ref, expecte
         'independent_replay_combinations': 256, 'parent_metrics': parent_metrics, 'quality_metrics': quality['metrics'],
         'reuse': read_json(output / 'candidate/reuse-summary.json'), 'Q1': qstatus,
         'attribution_report_id': attributed['report_id'], 'bindings': bindings,
+        'parent_r2_anchor': anchor['bindings'],
         'implementation': {n: file_digest(project / n) for n in FILES}, **c.RESTRICTIONS}
     write_json(output / 'result.json', result)
     u._seal(output)
     return result
 
 
-def verify_run(project, root):
+def verify_run(project, root, *, expected_ref_sha=None):
     """Portable offline reinspection; mandatory P4.1 replay remains executable."""
     from . import upstream_provenance as u
     from .approval_evidence import rescore, frozen_implementation, replay, same, BENCHMARK
@@ -181,18 +181,15 @@ def verify_run(project, root):
     c.need(result['automatic_research_approval'] is False and result['research_baseline_created'] is False
         and result['RESEARCH_BASELINE_APPROVED'] is False and result['RETRIEVAL_QUALITY_ACCEPTED'] is False
         and result['production_promotion'] == 'NOT_AUTHORIZED', 'INVALID_CANDIDATE', 'Archive cannot grant approval')
-    trust.validate_reference(ref, digest(ref))  # Integrity only; external transport pin is the trust anchor.
-    info = trust.verify_package(project, root / 'parent', ref)
+    anchor = qualify_parent_anchor(project, root / 'parent', ref, expected_ref_sha, root / 'parent-raw-results.json')
+    info = anchor['parent_verification']
+    if 'parent_r2_anchor' in result:
+        c.need(same(result['parent_r2_anchor'], anchor['bindings']), 'INVALID_CANDIDATE', 'Archived Parent R2 qualification differs')
     built = u.verify(project, root / 'candidate', ref['build_fingerprint'])
     parity = u.compare_full(project, root / 'candidate', root / 'full', ref['build_fingerprint'])
     c.need(info['node_id'] == result['baseline_id'] and built['candidate_id'] == result['candidate_id']
         and same(parity, read_json(root / 'parity.json')), 'INVALID_CANDIDATE', 'Archived execution binding mismatch')
-    spec = frozen_implementation(project, Path(project) / BENCHMARK, read_json(c.LOCK)['quality_policy'])
-    parent_rows = read_json(root / 'parent-raw-results.json')
-    rescore(parent_rows, spec, read_records(root / 'parent/corpus.jsonl'), read_records(root / 'parent/components/documentation.jsonl'))
-    c.need(file_digest(root / 'parent-raw-results.json') == ref['parent_rows_sha256'], 'INVALID_CANDIDATE', 'Restored parent rows mismatch')
-    c.need(same(parent_rows, replay(spec, root / 'parent/corpus.jsonl', root / 'parent/components/documentation.jsonl')),
-           'RETRIEVAL_EXECUTION_FAILED', 'Restored parent R2 anchor mismatch')
+    spec, parent_rows = anchor['spec'], anchor['rows']
     for label, folder in [('incremental', root / 'candidate'), ('full', root / 'full')]:
         rows = read_json(root / 'quality' / (label + '-raw-results.json'))
         metrics = rescore(rows, spec, read_records(folder / 'corpus.jsonl'), read_records(folder / 'components/documentation.jsonl'))
@@ -206,7 +203,8 @@ def verify_run(project, root):
     regenerated = attribution.summarize(spec, parent_rows, read_json(root / 'quality/incremental-raw-results.json'),
                                        qreport, bindings=result['bindings'])
     c.need(same(regenerated, read_json(root / 'regression-attribution.json')), 'INVALID_CANDIDATE', 'Restored attribution differs')
-    return {'status': 'VERIFIED', 'candidate_id': built['candidate_id'], 'restored_combinations_replayed': 256, **c.RESTRICTIONS}
+    return {'status': 'VERIFIED', 'candidate_id': built['candidate_id'], 'restored_combinations_replayed': 256,
+            'parent_anchor_reference_trust': anchor['reference_trust'], **c.RESTRICTIONS}
 
 
 def execute_plan(project, plan_path, work, output, *, q1_inputs=None, q1_sha=None):
