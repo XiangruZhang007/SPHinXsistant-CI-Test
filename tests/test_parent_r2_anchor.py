@@ -243,6 +243,65 @@ class AnchorTests(unittest.TestCase):
         with self.assertRaises(c.GateError) as archived: w.verify_run(P, r)
         self.assertEqual(live.exception.status, archived.exception.status)
 
+    def test_research_live_route_qualifies_restored_evaluated_parent_before_build(self):
+        from src import trusted_snapshot as trust
+        policy = policy_for(self.root / 'parent', self.shared / 'source1', self.shared / 'source1',
+                            self.revs, self.fp)
+        # Test-only front-door metadata; the real controlled package remains
+        # controlled throughout restoration/qualification and no build executes.
+        policy['provenance_type'] = 'GENUINE_UPSTREAM'
+        write_json(self.root / 'policy.json', policy)
+        restore = trust.restore
+        calls = []
+        def restore_fixture(*args): return restore(*args, controlled=True)
+        def qualify_fixture(*args):
+            result = anchor.qualify_parent_anchor(*args, controlled=True)
+            calls.append(result)
+            raise StopAfterAnchor()
+        with patch.object(trust, 'restore', side_effect=restore_fixture), \
+                patch.object(w, 'qualify_parent_anchor', side_effect=qualify_fixture), \
+                patch.object(u, 'build') as build, self.assertRaises(StopAfterAnchor):
+            w.run_local(P, self.shared / 'approved.tar.gz', self.shared / 'source1',
+                self.shared / 'source1', self.root / 'live', self.ref, digest(self.ref),
+                self.root / 'policy.json', file_digest(self.root / 'policy.json'), self.root / 'rows.json')
+        build.assert_not_called()
+        self.assertEqual(calls[0]['status'], 'QUALIFIED')
+        self.assertEqual(calls[0]['execution'], 'FRESH_R2_REPLAY_VERIFIED')
+        self.assertEqual(calls[0]['bindings']['baseline_id'], self.ref['node_id'])
+        self.assertNotEqual(calls[0]['historical_rows'], calls[0]['rows'])
+        self.assertTrue((self.root / 'live/parent/approval-evidence/verification.json').is_file())
+
+    def test_structural_only_research_parent_is_rejected_before_build(self):
+        from src import trusted_snapshot as trust
+        ref = self.structural_ref
+        policy = policy_for(self.shared / 'structural/c1', self.shared / 'source1',
+                            self.shared / 'source1', self.revs, self.fp)
+        policy['provenance_type'] = 'GENUINE_UPSTREAM'
+        write_json(self.root / 'policy.json', policy)
+        restore = trust.restore
+        def restore_fixture(*args): return restore(*args, controlled=True)
+        def qualify_fixture(*args): return anchor.qualify_parent_anchor(*args, controlled=True)
+        with patch.object(trust, 'restore', side_effect=restore_fixture), \
+                patch.object(w, 'qualify_parent_anchor', side_effect=qualify_fixture), \
+                patch.object(u, 'build') as build, self.assertRaisesRegex(ValueError, 'Structural-only'):
+            w.run_local(P, self.shared / 'structural.tar.gz', self.shared / 'source1',
+                self.shared / 'source1', self.root / 'live', ref, digest(ref), self.root / 'policy.json',
+                file_digest(self.root / 'policy.json'), self.root / 'rows.json')
+        build.assert_not_called()
+
+    def test_research_archive_requires_explicit_parent_anchor_binding(self):
+        root = self.root / 'archive'; root.mkdir()
+        shutil.copytree(self.root / 'parent', root / 'parent')
+        shutil.copyfile(self.root / 'rows.json', root / 'parent-raw-results.json')
+        write_json(root / 'trusted-reference.json', self.ref)
+        write_json(root / 'result.json', {**c.RESTRICTIONS,
+            'RESEARCH_BASELINE_APPROVED': False, 'RETRIEVAL_QUALITY_ACCEPTED': False})
+        u._seal(root)
+        def qualify_fixture(*args): return anchor.qualify_parent_anchor(*args, controlled=True)
+        with patch.object(w, 'qualify_parent_anchor', side_effect=qualify_fixture), \
+                self.assertRaisesRegex(ValueError, 'missing its Parent R2 binding'):
+            w.verify_run(P, root, expected_ref_sha=digest(self.ref))
+
     def test_verify_cli_propagates_independent_pin(self):
         with patch.object(w, 'verify_run', return_value={}) as verify, redirect_stdout(io.StringIO()):
             self.assertEqual(cli.main(['verify-run', '--root', 'archive', '--expected-reference-sha256', 'a' * 64]), 0)

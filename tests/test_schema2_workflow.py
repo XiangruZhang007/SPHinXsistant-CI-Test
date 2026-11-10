@@ -67,7 +67,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(report['Q1_status'], 'Q1_NOT_QUALIFIED_FOR_VERSION_PAIR')
         self.assertFalse(report['blocking'])
 
-    def test_research_parent_execution_blocker_not_removed(self):
+    def test_research_parent_without_bound_transition_policy_is_rejected(self):
         ref = {'package_format': 'schema2-research-baseline'}
         entry = {'reference': ref, 'build_policy_path': 'policy.json', 'build_policy_sha256': 'pinned'}
         revisions = c.read(c.LOCK)['upstreams']
@@ -75,7 +75,7 @@ class WorkflowContractTests(unittest.TestCase):
         with patch.object(t, 'registry_reference', return_value=entry), patch.object(w, 'checked_file', return_value=Path('dummy')), \
              patch.object(w, 'read_json', return_value=policy), patch.object(w, 'file_digest', return_value='pinned'):
             with self.assertRaises(c.GateError) as caught: w.plan(P, {}, 'valid', revisions)
-        self.assertEqual(caught.exception.status, 'PARENT_RETRIEVAL_ANCHOR_NOT_QUALIFIED')
+        self.assertEqual(caught.exception.status, 'AUTHORIZATION_FAILED')
 
     def test_unsafe_manual_revision_input(self):
         with self.assertRaises(c.GateError):

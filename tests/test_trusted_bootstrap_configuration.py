@@ -135,14 +135,14 @@ class TrustedBootstrapConfigurationTests(unittest.TestCase):
                 t.validate_reference(ref, digest(ref), remote=True)
             self.assertEqual(caught.exception.status, 'AUTHORIZATION_FAILED')
 
-    def test_research_parent_execution_still_requires_separate_qualification(self):
+    def test_relabeling_p2_reference_does_not_authorize_research_transition(self):
         ref = self.ref
         ref.update(package_format='schema2-research-baseline', accepted_package_schema=2)
         ref['authorization']['type'] = 'EXPLICIT_RESEARCH_BASELINE_REUSE'
         self.entry['expected_reference_sha256'] = digest(ref)
         with self.assertRaises(c.GateError) as caught:
             w.plan(P, self.registry, KEY, TARGETS)
-        self.assertEqual(caught.exception.status, 'PARENT_RETRIEVAL_ANCHOR_NOT_QUALIFIED')
+        self.assertEqual(caught.exception.status, 'AUTHORIZATION_FAILED')
 
     def test_incorrect_policy_pin_remains_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -13,6 +13,45 @@ FILES = ('src/schema2_workflow.py', 'src/trusted_snapshot.py', 'src/regression_a
          'docs/ci_v2_p5a_2_design.md', 'src/parent_r2_anchor.py')
 
 
+def _research_parent_scope(ref, policy):
+    """Metadata preflight only; actual evaluated qualification follows restore."""
+    if ref['package_format'] != 'schema2-research-baseline':
+        return
+    c.need(policy.get('schema_version') == 2 and policy.get('operation') == 'BUILD_CANDIDATE'
+           and policy.get('research_only') is True and policy.get('experiment_id')
+           and policy.get('automatic_research_approval') is False
+           and policy.get('automatic_reuse') is False
+           and policy.get('production_promotion') == 'NOT_AUTHORIZED'
+           and policy.get('provenance_type') == 'GENUINE_UPSTREAM'
+           and not policy.get('controlled_chain_fixture'),
+           'AUTHORIZATION_FAILED', 'Research Parent needs an explicit genuine research transition policy')
+    scope = policy.get('scope', {})
+    c.need(isinstance(scope, dict) and scope.get('parent') == {'kind': 'RESEARCH_BASELINE',
+           'node_id': ref.get('node_id'), 'package_checksum': ref.get('package_checksum')}
+           and scope.get('base_upstreams') == ref.get('upstreams')
+           and scope.get('base_source_state') == ref.get('source_state')
+           and scope.get('build_fingerprint') == ref.get('build_fingerprint'),
+           'AUTHORIZATION_FAILED', 'Transition policy differs from the selected research Parent')
+
+
+def _research_parent_edge(ref, parent, candidate):
+    """Bind verified packages to the selected immediate Parent and generation."""
+    if ref['package_format'] != 'schema2-research-baseline':
+        return
+    baseline = read_json(Path(parent) / 'upstream-baseline.json')
+    child = read_json(Path(candidate) / 'upstream-candidate.json')['identity']
+    generation = baseline['identity']['generation']
+    c.need(baseline['baseline_id'] == ref['node_id'] and type(generation) is int and generation >= 1
+           and child['parent'] == {'kind': 'RESEARCH_BASELINE', 'node_id': ref['node_id'],
+                                   'package_checksum': ref['package_checksum']}
+           and child['base_snapshot_id'] == ref['node_id']
+           and child['base_upstreams'] == ref['upstreams']
+           and child['base_source_state'] == ref['source_state']
+           and child['build_fingerprint'] == ref['build_fingerprint']
+           and type(child['generation']) is int and child['generation'] == generation + 1,
+           'INVALID_CANDIDATE', 'Candidate did not use the selected immediate research Parent/generation')
+
+
 def plan(project, registry, key, revisions):
     """Stdlib-only preflight before parser environment provisioning."""
     c.validate_request('formal', key, revisions)
@@ -23,8 +62,7 @@ def plan(project, registry, key, revisions):
            'AUTHORIZATION_FAILED', 'Reviewed build policy checksum mismatch')
     c.need(policy['scope']['target_upstreams'] == revisions and policy['provenance_type'] == 'GENUINE_UPSTREAM',
            'AUTHORIZATION_FAILED', 'Target pair is outside explicit genuine build authorization')
-    c.need(ref['package_format'] == 'p2-snapshot-v1', 'PARENT_RETRIEVAL_ANCHOR_NOT_QUALIFIED',
-           'Schema-2 research-parent R2 evidence anchor requires separate qualification')
+    _research_parent_scope(ref, policy)
     return {'schema_version': 2, 'key': key, 'upstreams': revisions,
             'registry_entry_sha256': digest(entry), 'status': 'SCHEMA2_MANUAL_PLAN', **c.RESTRICTIONS}
 
@@ -95,7 +133,7 @@ def diagnostics(project, output, spec, parent_rows, target_rows, bindings, *, q1
 
 def run_local(project, archive, base_source, target_source, output, ref, expected_ref_sha, policy_path,
               expected_policy_sha, parent_rows_path, *, q1_inputs=None, q1_sha=None):
-    """Qualified genuine P2 bootstrap path. Research parents fail closed for now."""
+    """Genuine P2/research path; restored Parents must qualify before building."""
     from . import upstream_provenance as u
     from .approval_evidence import BENCHMARK
     from .research_quality import evaluate_quality
@@ -108,8 +146,7 @@ def run_local(project, archive, base_source, target_source, output, ref, expecte
     policy = u._policy(policy_path, expected_policy_sha)
     c.need(policy['provenance_type'] == 'GENUINE_UPSTREAM' and not policy.get('controlled_chain_fixture'),
            'AUTHORIZATION_FAILED', 'Workflow accepts genuine authorized upstream transitions only')
-    c.need(ref['package_format'] == 'p2-snapshot-v1', 'PARENT_RETRIEVAL_ANCHOR_NOT_QUALIFIED',
-           'Approved schema-2 parents need separately qualified parent R2 anchors')
+    _research_parent_scope(ref, policy)
     c.need(file_digest(parent_rows_path) == ref['parent_rows_sha256'], 'AUTHORIZATION_FAILED', 'Parent R2 anchor mismatch')
     protected = (project, archive, base_source, target_source, policy_path, parent_rows_path)
     if q1_inputs is not None: protected += (Path(q1_inputs).parent,)
@@ -128,6 +165,7 @@ def run_local(project, archive, base_source, target_source, output, ref, expecte
     # selected blobs, public receipts and same/fast-forward relationship proofs.
     built = u.build(project, parent, base_source, target_source, output / 'candidate', policy_path=policy_path,
                     expected_policy_sha256=expected_policy_sha, expected_fingerprint=fp)
+    _research_parent_edge(ref, parent, output / 'candidate')
     full = u.full_reference(project, target_source, output / 'full', policy['scope']['target_upstreams'], fp)
     parity = u.compare_full(project, output / 'candidate', output / 'full', fp)
     write_json(output / 'parity.json', parity)
@@ -150,6 +188,7 @@ def run_local(project, archive, base_source, target_source, output, ref, expecte
     u.verify(project, output / 'candidate', fp)
     u.compare_full(project, output / 'candidate', output / 'full', fp)
     trust.verify_package(project, parent, ref)
+    _research_parent_edge(ref, parent, output / 'candidate')
     u._parent(project, parent, fp, policy, base_source)
     u.verify_sources(project, target_source, policy['scope']['target_upstreams'])
     c.need(file_digest(policy_path) == expected_policy_sha and file_digest(parent_rows_path) == ref['parent_rows_sha256'],
@@ -183,9 +222,13 @@ def verify_run(project, root, *, expected_ref_sha=None):
         and result['production_promotion'] == 'NOT_AUTHORIZED', 'INVALID_CANDIDATE', 'Archive cannot grant approval')
     anchor = qualify_parent_anchor(project, root / 'parent', ref, expected_ref_sha, root / 'parent-raw-results.json')
     info = anchor['parent_verification']
+    if ref['package_format'] == 'schema2-research-baseline':
+        c.need('parent_r2_anchor' in result, 'INVALID_CANDIDATE', 'Research run is missing its Parent R2 binding')
+        _research_parent_scope(ref, read_json(root / 'build-policy.json'))
     if 'parent_r2_anchor' in result:
         c.need(same(result['parent_r2_anchor'], anchor['bindings']), 'INVALID_CANDIDATE', 'Archived Parent R2 qualification differs')
     built = u.verify(project, root / 'candidate', ref['build_fingerprint'])
+    _research_parent_edge(ref, root / 'parent', root / 'candidate')
     parity = u.compare_full(project, root / 'candidate', root / 'full', ref['build_fingerprint'])
     c.need(info['node_id'] == result['baseline_id'] and built['candidate_id'] == result['candidate_id']
         and same(parity, read_json(root / 'parity.json')), 'INVALID_CANDIDATE', 'Archived execution binding mismatch')
