@@ -34,11 +34,20 @@ def main(argv=None):
     restore = commands.add_parser('restore')
     for name in ('archive', 'destination', 'reference'): restore.add_argument('--' + name, type=Path, required=True)
     restore.add_argument('--expected-reference-sha256', required=True)
+    next_build = commands.add_parser('build-next', help='Local build only from an explicit verified Parent; no evaluation or approval')
+    for name in ('registry', 'parent', 'base-source', 'target-source', 'output', 'policy'):
+        next_build.add_argument('--' + name, type=Path, required=True)
+    for name in ('key', 'expected-reference-sha256', 'expected-policy-sha256'):
+        next_build.add_argument('--' + name, required=True)
     a = parser.parse_args(argv)
     if a.command == 'execute-plan' and ((a.q1_inputs is None) != (a.q1_inputs_sha256 is None)):
         parser.error('--q1-inputs and --q1-inputs-sha256 must be provided together')
     try:
-        if a.command == 'plan':
+        if a.command == 'build-next':
+            from src.continuous_corpus import build_next
+            result = build_next(P, a.registry, a.key, a.expected_reference_sha256, a.parent,
+                a.base_source, a.target_source, a.output, a.policy, a.expected_policy_sha256)
+        elif a.command == 'plan':
             result = w.plan(P, c.read(t.REGISTRY), a.key, {'SPHinXsys': a.sys_revision, 'SPHinXsim': a.sim_revision})
             a.output.mkdir(exist_ok=False, parents=True)
             c.write(a.output / 'plan.json', result)
@@ -56,7 +65,7 @@ def main(argv=None):
     except (OSError, ValueError, KeyError, TypeError, IndexError, tarfile.TarError, subprocess.CalledProcessError) as error:
         result = {'status': getattr(error, 'status', 'INTEGRATION_FAILED'), 'error': str(error), **c.RESTRICTIONS}
         output = getattr(a, 'output', None)
-        if output is not None:
+        if output is not None and a.command != 'build-next':
             output.mkdir(parents=True, exist_ok=True)
             if not (output / 'failure.json').exists(): c.write(output / 'failure.json', result)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
