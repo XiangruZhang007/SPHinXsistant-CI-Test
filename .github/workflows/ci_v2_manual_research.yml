@@ -69,6 +69,8 @@ jobs:
           tools/treesitter-chunker/.venv/bin/python -m pip install -r configs/ci_v2_parser_requirements.txt
           tools/treesitter-chunker/.venv/bin/python -m pip install -c configs/ci_v2_parser_requirements.txt -e tools/treesitter-chunker
       - name: Restore, build and evaluate research candidate
+        env:
+          TRUSTED_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           q1_args=()
           if [[ -n "$Q1_TRANSPORT_CONFIG" ]]; then

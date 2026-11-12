@@ -47,6 +47,18 @@ class ResearchPlanningTests(unittest.TestCase):
     def plan(self):
         return w.plan(self.root, self.registry(), 'research', self.revisions)
 
+    def test_verified_remote_baseline_selection_supports_public_and_private_release(self):
+        for kind in (trust.PUBLIC_RELEASE_KIND, trust.PRIVATE_RELEASE_KIND):
+            with self.subTest(kind=kind):
+                ref = copy.deepcopy(self.ref)
+                ref['storage']['kind'] = kind
+                self.assertEqual(w._remote_baseline_selection(ref), 'PINNED_REFERENCE_VERIFIED')
+
+    def test_local_baseline_selection_still_requires_remote_configuration(self):
+        ref = copy.deepcopy(self.ref)
+        ref['storage'] = {'kind': 'LOCAL_QUALIFICATION_ONLY'}
+        self.assertEqual(w._remote_baseline_selection(ref), 'CONFIGURATION_REQUIRED')
+
     def test_research_plan_is_metadata_only_and_does_not_claim_qualification(self):
         with patch.object(trust, 'download') as download, patch.object(w, 'qualify_parent_anchor') as qualify:
             planned = self.plan()
@@ -145,6 +157,7 @@ class ResearchPlanningTests(unittest.TestCase):
                 self.assertEqual(w.execute_plan(self.root, plan_path, work, output), c.RESTRICTIONS)
                 package.assert_called_once_with(output, output.parent / 'candidate.tar.gz')
             self.assertEqual(download.call_count, 2)
+            self.assertEqual([call.kwargs for call in download.call_args_list], [{}, {}])
             self.assertEqual(local.call_args.args[5:7], (self.ref, digest(self.ref)))
             self.assertEqual(local.call_args.args[-1], work / 'parent-rows.json')
             self.assertEqual(local.call_args.kwargs, {'q1_inputs': None, 'q1_sha': None})
@@ -154,6 +167,30 @@ class ResearchPlanningTests(unittest.TestCase):
 
     def test_execute_plan_cannot_package_after_research_qualification_failure(self):
         self.execute(failure=c.GateError('PARENT_RETRIEVAL_ANCHOR_NOT_QUALIFIED', 'Fixture refusal'))
+
+    def test_execute_plan_passes_token_only_for_same_repository_private_assets(self):
+        for name, asset_id in [('storage', 101), ('parent_rows_storage', 102)]:
+            self.ref[name].update(kind=trust.PRIVATE_RELEASE_KIND, repository='research-owner/research-ci',
+                repository_id=99001, asset_size=1234 if name == 'storage' else 567,
+                release_id=100, asset_id=asset_id, tag='synthetic-research-fixture',
+                asset_name=name + '.fixture')
+        registry = self.registry()
+        registry_path, plan_path = self.root / 'private-registry.json', self.root / 'private-plan.json'
+        registry_path.write_text(json.dumps(registry))
+        work, output = self.root / 'private-work', self.root / 'private-run'
+        with patch.dict('os.environ', {'GITHUB_REPOSITORY': 'research-owner/research-ci',
+                'GITHUB_REPOSITORY_ID': '99001', 'TRUSTED_RELEASE_TOKEN': 'synthetic-workflow-token'}):
+            planned = w.plan(self.root, registry, 'research', self.revisions)
+            plan_path.write_text(json.dumps(planned))
+            with patch.object(trust, 'REGISTRY', registry_path), patch.object(c, 'frozen_runtime'), \
+                    patch.object(w.shutil, 'disk_usage', return_value=SimpleNamespace(free=9 * 1024**3)), \
+                    patch.object(trust, 'download') as download, patch.object(w.subprocess, 'run'), \
+                    patch.object(w, 'run_local', return_value=c.RESTRICTIONS), \
+                    patch.object(c, 'package_candidate'):
+                w.execute_plan(self.root, plan_path, work, output)
+        self.assertEqual(download.call_count, 2)
+        self.assertEqual([call.kwargs for call in download.call_args_list], [
+            {'token': 'synthetic-workflow-token'}, {'token': 'synthetic-workflow-token'}])
 
     def edge(self):
         parent, child = self.root / 'parent', self.root / 'candidate'

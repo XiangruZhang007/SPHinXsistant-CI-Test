@@ -1,7 +1,9 @@
-"""Explicitly authorized snapshot recovery. Public Release reads only; no writes.
+"""Explicitly authorized snapshot recovery from immutable GitHub Releases.
 
 The expected reference digest is supplied outside the downloaded package. An
 integrity check is not an authorization and a P2 anchor is not research approval.
+Public P2 transport remains unauthenticated; private same-repository transport
+uses a narrowly scoped workflow token for API requests only.
 """
 from pathlib import Path
 import os
@@ -17,6 +19,10 @@ from .corpus_snapshot import checked_file, digest, file_digest, read_json
 
 REGISTRY = c.ROOT / 'configs/ci_v2_schema2_trusted_baselines.json'
 RELEASE_REPOSITORY = 'XiangruZhang007/SPHinX_AI_Assistant'
+PRIVATE_RELEASE_KIND = 'GITHUB_PRIVATE_RELEASE_ASSET'
+PUBLIC_RELEASE_KIND = 'GITHUB_RELEASE_ASSET'
+RELEASE_DOWNLOAD_HOSTS = frozenset(('github.com', 'release-assets.githubusercontent.com',
+                                    'objects.githubusercontent.com'))
 FORMATS = {'p2-snapshot-v1': (1, 'EXPLICIT_P2_BOOTSTRAP'),
            'schema2-research-baseline': (2, 'EXPLICIT_RESEARCH_BASELINE_REUSE')}
 DOWNLOAD_IMPLEMENTATION = 'atomic-no-clobber-v2'
@@ -44,11 +50,21 @@ def validate_reference(ref, expected_sha, *, remote=False, controlled=False):
         and auth.get('automatic_research_approval') is False and auth.get('production_promotion') == 'NOT_AUTHORIZED',
         'AUTHORIZATION_FAILED', 'Missing explicit scoped bootstrap/research authorization')
     kind = ref['storage'].get('kind')
-    c.need(kind in ('GITHUB_RELEASE_ASSET', 'LOCAL_QUALIFICATION_ONLY'), 'INVALID_REFERENCE', 'Unsupported trusted storage')
+    c.need(kind in (PUBLIC_RELEASE_KIND, PRIVATE_RELEASE_KIND, 'LOCAL_QUALIFICATION_ONLY'),
+           'INVALID_REFERENCE', 'Unsupported trusted storage')
     if remote:
-        c.need(not controlled and kind == 'GITHUB_RELEASE_ASSET', 'CONFIGURATION_REQUIRED', 'Remote registry needs a reviewed immutable Release asset')
-        release_locator(ref['storage'])
-        release_locator(ref.get('parent_rows_storage', {}))
+        c.need(not controlled and kind in (PUBLIC_RELEASE_KIND, PRIVATE_RELEASE_KIND), 'CONFIGURATION_REQUIRED',
+               'Remote registry needs a reviewed immutable Release asset')
+        primary = ref['storage']
+        rows = ref.get('parent_rows_storage', {})
+        release_locator(primary)
+        release_locator(rows)
+        if PRIVATE_RELEASE_KIND in (primary.get('kind'), rows.get('kind')):
+            c.need(primary.get('kind') == rows.get('kind') == PRIVATE_RELEASE_KIND
+                and all(primary.get(k) == rows.get(k) for k in ('repository', 'repository_id', 'release_id', 'tag'))
+                and primary.get('asset_id') != rows.get('asset_id')
+                and primary.get('asset_name') != rows.get('asset_name'),
+                'INVALID_REFERENCE', 'Private baseline and Parent R2 assets must be distinct assets in the same pinned Release')
     else:
         c.need(not controlled or kind == 'LOCAL_QUALIFICATION_ONLY', 'AUTHORIZATION_FAILED', 'Fixture privileges cannot enter remote trust')
     return ref
@@ -125,54 +141,131 @@ def restore(project, archive, destination, ref, expected_sha, *, controlled=Fals
 
 
 def release_locator(storage):
-    c.need(storage.get('kind') == 'GITHUB_RELEASE_ASSET' and storage.get('repository') == RELEASE_REPOSITORY
+    kind = storage.get('kind')
+    repository = storage.get('repository')
+    c.need(kind in (PUBLIC_RELEASE_KIND, PRIVATE_RELEASE_KIND)
+        and isinstance(repository, str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}', repository)
         and all(type(storage.get(k)) is int and storage[k] > 0 for k in ('release_id', 'asset_id'))
         and isinstance(storage.get('tag'), str) and re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,127}', storage['tag'])
         and storage['tag'].lower() not in ('latest', 'main', 'master')
         and isinstance(storage.get('asset_name'), str) and re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,127}', storage['asset_name'])
         and storage.get('immutable_required') is True, 'UNSAFE_INPUT', 'Unpinned or incomplete immutable Release locator')
-    return 'https://api.github.com/repos/' + RELEASE_REPOSITORY
+    if kind == PUBLIC_RELEASE_KIND:
+        c.need(repository == RELEASE_REPOSITORY, 'UNSAFE_INPUT', 'Public Release repository differs from the pinned P2 host')
+    else:
+        c.need(type(storage.get('repository_id')) is int and storage['repository_id'] > 0
+            and type(storage.get('asset_size')) is int and 0 < storage['asset_size'] <= 2 * 1024**3,
+            'UNSAFE_INPUT', 'Private Release needs pinned repository ID and asset size')
+        # A private reference is valid only when this workflow itself runs from
+        # the same repository. This prevents GITHUB_TOKEN from becoming a
+        # cross-repository credential.
+        c.need(os.environ.get('GITHUB_REPOSITORY') == repository
+            and os.environ.get('GITHUB_REPOSITORY_ID') == str(storage['repository_id']),
+            'UNSAFE_INPUT', 'Private Release must belong to this exact workflow repository')
+    return 'https://api.github.com/repos/' + repository
 
 
-def _request(url, *, binary=False):
-    """Public reads, no credentials. Bound redirects even for octet-stream GET."""
-    def allowed(target):
+def _request(url, *, binary=False, token=None):
+    """Request GitHub API metadata and follow only safe asset redirects.
+
+    Authentication is attached only to api.github.com. Redirects are handled
+    manually so a token can never be forwarded to a CDN or other host.
+    """
+    def check_url(target, *, redirect=False):
         parsed = urllib.parse.urlsplit(target)
-        c.need(parsed.scheme == 'https' and parsed.hostname in
-            ('api.github.com', 'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com')
-            and not parsed.username and not parsed.password and parsed.port in (None, 443),
-            'UNSAFE_INPUT', 'Unsafe Release download redirect')
-    allowed(url)
-    class Redirect(urllib.request.HTTPRedirectHandler):
+        try:
+            port = parsed.port
+        except ValueError:
+            raise c.GateError('UNSAFE_INPUT', 'Unsafe GitHub Release URL') from None
+        allowed_hosts = RELEASE_DOWNLOAD_HOSTS if redirect else frozenset(('api.github.com',))
+        c.need(parsed.scheme == 'https' and parsed.hostname in allowed_hosts
+            and not parsed.username and not parsed.password and port in (None, 443)
+            and not parsed.fragment, 'UNSAFE_INPUT', 'Unsafe GitHub Release URL')
+        return parsed
+
+    check_url(url)
+    c.need(token is None or (isinstance(token, str) and token and not any(ch.isspace() for ch in token)),
+           'AUTHENTICATION_FAILED', 'Invalid GitHub token input')
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
-            allowed(newurl)
-            return super().redirect_request(req, fp, code, msg, headers, newurl)
-    request = urllib.request.Request(url, headers={'Accept': 'application/octet-stream' if binary else 'application/vnd.github+json',
-                                                  'User-Agent': 'SPHinXsistant-research-recovery'})
-    return urllib.request.build_opener(Redirect()).open(request, timeout=60)
+            return None
+
+    opener = urllib.request.build_opener(NoRedirect())
+    current, current_token = url, token
+    for redirect_count in range(4):
+        parsed = check_url(current, redirect=redirect_count > 0)
+        headers = {'Accept': 'application/octet-stream' if binary else 'application/vnd.github+json',
+                   'User-Agent': 'SPHinXsistant-research-recovery'}
+        if current_token is not None:
+            c.need(parsed.hostname == 'api.github.com', 'AUTHENTICATION_FAILED',
+                   'GitHub token cannot be sent to this host')
+            headers['Authorization'] = 'Bearer ' + current_token
+        request = urllib.request.Request(current, headers=headers)
+        try:
+            return opener.open(request, timeout=60)
+        except urllib.error.HTTPError as error:
+            if binary and error.code in (301, 302, 303, 307, 308):
+                location = error.headers.get('Location')
+                error.close()
+                c.need(isinstance(location, str) and location, 'RELEASE_DOWNLOAD_FAILED',
+                       'GitHub asset redirect did not include a location')
+                destination = urllib.parse.urljoin(current, location)
+                check_url(destination, redirect=True)
+                current, current_token = destination, None
+                continue
+            if error.code in (401, 403):
+                error.close()
+                raise c.GateError('AUTHENTICATION_FAILED', 'GitHub Release authentication or repository access failed') from None
+            error.close()
+            raise c.GateError('RELEASE_DOWNLOAD_FAILED', 'GitHub Release request failed') from None
+        except (urllib.error.URLError, TimeoutError, OSError):
+            raise c.GateError('RELEASE_DOWNLOAD_FAILED', 'GitHub Release request failed') from None
+    raise c.GateError('RELEASE_DOWNLOAD_FAILED', 'Too many GitHub asset redirects')
 
 
-def download(storage, destination, expected_sha):
+def download(storage, destination, expected_sha, *, token=None):
     """Numeric immutable asset identity + externally pinned bytes, never latest."""
     import json
     destination = Path(destination)
     c.need(not destination.exists() and not destination.is_symlink(), 'INVALID_OUTPUT', 'Download destination must be new')
     base = release_locator(storage)
+    private = storage['kind'] == PRIVATE_RELEASE_KIND
+    if private:
+        c.need(isinstance(token, str) and token and not any(ch.isspace() for ch in token),
+               'AUTHENTICATION_FAILED', 'Private Release download requires workflow token')
+        c.need(re.fullmatch(r'[0-9a-f]{64}', expected_sha or '') is not None,
+               'INVALID_REFERENCE', 'Private Release requires an independent SHA-256 pin')
+    def request(url, *, binary=False):
+        if private:
+            return _request(url, binary=binary, token=token)
+        return _request(url, binary=binary)
     def metadata(url):
-        with _request(url) as stream:
+        with request(url) as stream:
             raw = stream.read(4 * 1024**2 + 1)
         c.need(len(raw) <= 4 * 1024**2, 'CORRUPT_DOWNLOAD', 'Oversized Release metadata')
         return json.loads(raw)
+    if private:
+        repository = metadata(base)
+        c.need(type(repository.get('id')) is int and repository['id'] == storage['repository_id']
+            and repository.get('full_name') == storage['repository'] and repository.get('private') is True,
+            'INVALID_REFERENCE', 'Private repository identity/visibility mismatch')
     release = metadata(base + '/releases/' + str(storage['release_id']))
-    c.need(release['id'] == storage['release_id'] and release.get('immutable') is True
-        and release.get('draft') is False and release['tag_name'] == storage['tag'],
+    c.need(type(release.get('id')) is int and release['id'] == storage['release_id']
+        and release.get('immutable') is True and release.get('draft') is False
+        and release.get('tag_name') == storage['tag'],
         'INVALID_REFERENCE', 'Release is not the pinned published immutable release')
     asset_url = base + '/releases/assets/' + str(storage['asset_id'])
     asset = metadata(asset_url)
-    c.need(asset['id'] == storage['asset_id'] and asset['name'] == storage['asset_name']
+    c.need(type(asset.get('id')) is int and asset['id'] == storage['asset_id']
+        and asset.get('name') == storage['asset_name']
         and asset.get('state') == 'uploaded' and type(asset.get('size')) is int
         and 0 < asset['size'] <= 2 * 1024**3
-        and any(x['id'] == storage['asset_id'] and x['name'] == storage['asset_name'] for x in release['assets']),
+        and (not private or asset['size'] == storage['asset_size'])
+        and isinstance(release.get('assets'), list)
+        and any(isinstance(x, dict) and type(x.get('id')) is int and x['id'] == storage['asset_id']
+            and x.get('name') == storage['asset_name'] and x.get('state', 'uploaded') == 'uploaded'
+            and (not private or x.get('size') == storage['asset_size']) for x in release['assets']),
         'INVALID_REFERENCE', 'Asset does not belong to pinned release/name')
     if asset.get('digest') is not None:
         c.need(asset['digest'] == 'sha256:' + expected_sha, 'CORRUPT_DOWNLOAD', 'Release digest mismatch')
@@ -181,7 +274,7 @@ def download(storage, destination, expected_sha):
     # a file another process/operator created while the download was in flight.
     with tempfile.TemporaryDirectory(prefix='.release-download-', dir=destination.parent) as tmp:
         staged = Path(tmp) / 'payload'
-        with _request(asset_url, binary=True) as source, staged.open('xb') as target:
+        with request(asset_url, binary=True) as source, staged.open('xb') as target:
             size = 0
             while data := source.read(1024**2):
                 size += len(data)

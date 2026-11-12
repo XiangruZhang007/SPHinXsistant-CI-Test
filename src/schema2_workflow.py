@@ -13,6 +13,13 @@ FILES = ('src/schema2_workflow.py', 'src/trusted_snapshot.py', 'src/regression_a
          'docs/ci_v2_p5a_2_design.md', 'src/parent_r2_anchor.py')
 
 
+def _remote_baseline_selection(ref):
+    """Report a pinned selection for either supported Release transport."""
+    if ref['storage']['kind'] in (trust.PUBLIC_RELEASE_KIND, trust.PRIVATE_RELEASE_KIND):
+        return 'PINNED_REFERENCE_VERIFIED'
+    return 'CONFIGURATION_REQUIRED'
+
+
 def _research_parent_scope(ref, policy):
     """Metadata preflight only; actual evaluated qualification follows restore."""
     if ref['package_format'] != 'schema2-research-baseline':
@@ -196,8 +203,7 @@ def run_local(project, archive, base_source, target_source, output, ref, expecte
     result = {'schema_version': 2, 'local_integration': 'LOCAL_VALIDATED', 'STRUCTURAL_PARITY': 'PASS',
         'RETRIEVAL_QUALITY_ACCEPTED': False, 'RESEARCH_BASELINE_APPROVED': False,
         'hosted_validation': 'PENDING_HOSTED_REVIEW' if os.environ.get('GITHUB_ACTIONS') == 'true' else 'HOSTED_NOT_RUN',
-        'remote_baseline_selection': ('PINNED_REFERENCE_VERIFIED' if ref['storage']['kind'] == 'GITHUB_RELEASE_ASSET'
-                                      else 'CONFIGURATION_REQUIRED'), 'baseline_id': info['node_id'],
+        'remote_baseline_selection': _remote_baseline_selection(ref), 'baseline_id': info['node_id'],
         'candidate_id': built['candidate_id'], 'target_source_state': built['target_source_state'],
         'independent_full_snapshot_id': full['snapshot_id'], 'runtime': runtime,
         'candidate_evaluation_combinations': 128, 'full_evaluation_combinations': 128,
@@ -262,8 +268,13 @@ def execute_plan(project, plan_path, work, output, *, q1_inputs=None, q1_sha=Non
     c.need(shutil.disk_usage(work.parent).free >= 8 * 1024**3, 'RESOURCE_LIMIT', 'At least 8 GiB free required')
     work.mkdir(exist_ok=False)
     entry = registry['baselines'][planned['key']]; ref = entry['reference']
-    trust.download(ref['storage'], work / 'parent.tar.gz', ref['transport_sha256'])
-    trust.download(ref['parent_rows_storage'], work / 'parent-rows.json', ref['parent_rows_sha256'])
+    for storage, path, checksum in (
+            (ref['storage'], work / 'parent.tar.gz', ref['transport_sha256']),
+            (ref['parent_rows_storage'], work / 'parent-rows.json', ref['parent_rows_sha256'])):
+        if storage.get('kind') == trust.PRIVATE_RELEASE_KIND:
+            trust.download(storage, path, checksum, token=os.environ.get('TRUSTED_RELEASE_TOKEN'))
+        else:
+            trust.download(storage, path, checksum)
     # New isolated repositories only. Full history is required for ancestry;
     # never fetch/checkout inside protected or operator-provided repositories.
     for label, revisions in [('base-source', ref['upstreams']), ('target-source', planned['upstreams'])]:
