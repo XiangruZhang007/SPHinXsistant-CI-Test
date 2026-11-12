@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from src import ci_v2_research as c, schema2_workflow as w, trusted_snapshot as t
 from src import upstream_provenance as u
@@ -16,6 +17,13 @@ REFERENCE_SHA = '52c6a32d77ddefec103e5d882655b7ac58756c4bab57edd3ad4b83eec2b0ea4
 POLICY_SHA = '9fc2729a4b2881ebd557e797554f5ec6696f877fffbe9b523f270098e2df4fb5'
 TARGETS = {'SPHinXsys': '351368e108f47f8d15f89baac96683ecadaee32c',
            'SPHinXsim': 'dceacd4e509a8592b802cf44bb2885bea7ddfdb3'}
+C1_C2_KEY = 'c1-research-parent-09b91a36'
+C1_C2_REFERENCE_SHA = 'f92e93ba360ca9a7d78c2b8ab285038c4068366b41b97db7ed06acb25e20f352'
+C1_C2_POLICY_SHA = '8e159d7100830ceda49261f3246e66362beacb246c6a595d94b8ea8061406766'
+C1_C2_TARGETS = {'SPHinXsys': '351368e108f47f8d15f89baac96683ecadaee32c',
+                 'SPHinXsim': 'bd1c2a46740b851c9c05423a30d5bb54ba550028'}
+C1_C2_REPOSITORY = 'XiangruZhang007/SPHinXsistant-CI-Test'
+C1_C2_REPOSITORY_ID = 1455203884
 
 
 class TrustedBootstrapConfigurationTests(unittest.TestCase):
@@ -36,7 +44,9 @@ class TrustedBootstrapConfigurationTests(unittest.TestCase):
 
     def test_exact_p2_identity_and_research_only_authorization(self):
         self.assertEqual(self.registry['status'], 'P2_BOOTSTRAP_CONFIGURED')
-        self.assertEqual(set(self.registry['baselines']), {KEY})
+        self.assertEqual(set(self.registry['baselines']), {KEY, C1_C2_KEY})
+        self.assertEqual(digest(self.entry),
+                         '934e2743a2fc35c3c24275ca34ebe39cec227ca0736ecf1d1a7be13b3f644f6a')
         self.assertEqual((self.ref['schema_version'], self.ref['package_format'],
                           self.ref['accepted_package_schema']), (2, 'p2-snapshot-v1', 1))
         self.assertEqual(self.ref['node_id'],
@@ -152,6 +162,48 @@ class TrustedBootstrapConfigurationTests(unittest.TestCase):
             with self.assertRaises(c.GateError) as caught:
                 w.plan(project, self.registry, KEY, TARGETS)
             self.assertEqual(caught.exception.status, 'AUTHORIZATION_FAILED')
+
+    def test_c1_private_research_parent_and_c2_policy_preflight(self):
+        entry = self.registry['baselines'][C1_C2_KEY]
+        ref = entry['reference']
+        self.assertEqual(entry['expected_reference_sha256'], C1_C2_REFERENCE_SHA)
+        self.assertEqual(digest(ref), C1_C2_REFERENCE_SHA)
+        self.assertEqual(entry['build_policy_path'], 'configs/ci_v2_c1_c2_build_policy.json')
+        self.assertEqual(entry['build_policy_sha256'], C1_C2_POLICY_SHA)
+        self.assertEqual(file_digest(P / entry['build_policy_path']), C1_C2_POLICY_SHA)
+        self.assertEqual(ref['node_id'],
+                         'sha256-09b91a3634aba71ce4974c8266d7f73cba6ecb0cfabe0e4291a30bf9c9229c88')
+        self.assertEqual(ref['package_checksum'],
+                         '67e5e3f7a3707d2643ca319864bbba182f62d9ece0548fee6c615710c4f3d3fe')
+        self.assertEqual(ref['upstreams'], TARGETS)
+        self.assertEqual(ref['transport_sha256'],
+                         '20e1927193470bd8c6b1e1cff198bef5b3a804aadc53cc57b99c08b7eb3ed2e3')
+        self.assertEqual(ref['parent_rows_sha256'],
+                         '372569fe9ca539a0dcfb0cd19ffa863b61e7a8d6b4ff345ce4c168afdaf40f37')
+        self.assertEqual(ref['authorization']['type'], 'EXPLICIT_RESEARCH_BASELINE_REUSE')
+        self.assertIs(ref['authorization']['research_only'], True)
+        self.assertIs(ref['authorization']['automatic_research_approval'], False)
+        self.assertEqual(ref['authorization']['production_promotion'], 'NOT_AUTHORIZED')
+        primary, rows = ref['storage'], ref['parent_rows_storage']
+        for locator in (primary, rows):
+            self.assertEqual(locator['kind'], t.PRIVATE_RELEASE_KIND)
+            self.assertEqual(locator['repository'], C1_C2_REPOSITORY)
+            self.assertEqual(locator['repository_id'], C1_C2_REPOSITORY_ID)
+            self.assertEqual(locator['release_id'], 443114216)
+            self.assertEqual(locator['tag'], 'ci-v2-c1-research-parent-09b91a36')
+            self.assertIs(locator['immutable_required'], True)
+        self.assertEqual((primary['asset_id'], primary['asset_name'], primary['asset_size']),
+                         (739932956, 'c1-research-parent-09b91a36.tar.gz', 29714707))
+        self.assertEqual((rows['asset_id'], rows['asset_name'], rows['asset_size']),
+                         (739934006, 'c1-parent-r2-results.json', 6498477))
+        with patch.dict('os.environ', {'GITHUB_REPOSITORY': C1_C2_REPOSITORY,
+                                      'GITHUB_REPOSITORY_ID': str(C1_C2_REPOSITORY_ID)}):
+            self.assertEqual(t.registry_reference(self.registry, C1_C2_KEY), entry)
+            plan = w.plan(P, self.registry, C1_C2_KEY, C1_C2_TARGETS)
+        self.assertEqual(plan['status'], 'SCHEMA2_MANUAL_PLAN')
+        self.assertEqual(plan['upstreams'], C1_C2_TARGETS)
+        self.assertIs(plan['automatic_research_approval'], False)
+        self.assertEqual(plan['production_promotion'], 'NOT_AUTHORIZED')
 
 
 if __name__ == '__main__':

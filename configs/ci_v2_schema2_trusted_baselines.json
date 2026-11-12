@@ -1,5 +1,57 @@
 {
   "baselines": {
+    "c1-research-parent-09b91a36": {
+      "build_policy_path": "configs/ci_v2_c1_c2_build_policy.json",
+      "build_policy_sha256": "8e159d7100830ceda49261f3246e66362beacb246c6a595d94b8ea8061406766",
+      "expected_reference_sha256": "f92e93ba360ca9a7d78c2b8ab285038c4068366b41b97db7ed06acb25e20f352",
+      "reference": {
+        "accepted_package_schema": 2,
+        "authorization": {
+          "automatic_research_approval": false,
+          "experiment_id": "c1-research-authorization-20261110T153117Z",
+          "production_promotion": "NOT_AUTHORIZED",
+          "research_only": true,
+          "scope": "ISOLATED_RESEARCH_PARENT_REUSE",
+          "type": "EXPLICIT_RESEARCH_BASELINE_REUSE"
+        },
+        "build_fingerprint": "7f66fe80e92d7263d5147d4fea551855184af75829f5b62993eb162acceb0cd8",
+        "corpus_sha256": "224fd0723fd0d77a3f8ad7cd300ecd31856fd689b0fc5e6c942b8d691ef63f8d",
+        "manifest_sha256": "b888da559ba76078e0ba3093d46a75c7e6f1acd9554181f90d93886a22088dbc",
+        "node_id": "sha256-09b91a3634aba71ce4974c8266d7f73cba6ecb0cfabe0e4291a30bf9c9229c88",
+        "package_checksum": "67e5e3f7a3707d2643ca319864bbba182f62d9ece0548fee6c615710c4f3d3fe",
+        "package_format": "schema2-research-baseline",
+        "parent_rows_sha256": "372569fe9ca539a0dcfb0cd19ffa863b61e7a8d6b4ff345ce4c168afdaf40f37",
+        "parent_rows_storage": {
+          "asset_id": 739934006,
+          "asset_name": "c1-parent-r2-results.json",
+          "asset_size": 6498477,
+          "immutable_required": true,
+          "kind": "GITHUB_PRIVATE_RELEASE_ASSET",
+          "release_id": 443114216,
+          "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
+          "repository_id": 1455203884,
+          "tag": "ci-v2-c1-research-parent-09b91a36"
+        },
+        "schema_version": 2,
+        "source_state": "sha256-f69af955d057a23cf32586d024a24c0f2d38becfdfa5249625688d2e51e3b082",
+        "storage": {
+          "asset_id": 739932956,
+          "asset_name": "c1-research-parent-09b91a36.tar.gz",
+          "asset_size": 29714707,
+          "immutable_required": true,
+          "kind": "GITHUB_PRIVATE_RELEASE_ASSET",
+          "release_id": 443114216,
+          "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
+          "repository_id": 1455203884,
+          "tag": "ci-v2-c1-research-parent-09b91a36"
+        },
+        "transport_sha256": "20e1927193470bd8c6b1e1cff198bef5b3a804aadc53cc57b99c08b7eb3ed2e3",
+        "upstreams": {
+          "SPHinXsim": "dceacd4e509a8592b802cf44bb2885bea7ddfdb3",
+          "SPHinXsys": "351368e108f47f8d15f89baac96683ecadaee32c"
+        }
+      }
+    },
     "p2-initial-bootstrap": {
       "build_policy_path": "configs/ci_v2_p2_bootstrap_build_policy.json",
       "build_policy_sha256": "9fc2729a4b2881ebd557e797554f5ec6696f877fffbe9b523f270098e2df4fb5",
