@@ -1,5 +1,6 @@
 name: CI V2 Manual Research Candidate
 
+# Keep this manual-only workflow on the default branch for GitHub registration.
 on:
   workflow_dispatch:
     inputs:
