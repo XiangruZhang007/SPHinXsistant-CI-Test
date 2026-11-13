@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GitHub Owner Manual Research Baseline Approval Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "enabled",
+    "repository",
+    "repository_id",
+    "default_branch",
+    "workflow_path",
+    "registry_path",
+    "allow_repository_owner",
+    "authorized_approver_ids"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "enabled": {"const": true},
+    "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+    "repository_id": {"type": "integer", "minimum": 1},
+    "default_branch": {"type": "string", "minLength": 1, "maxLength": 200},
+    "workflow_path": {"type": "string", "pattern": "^\\.github/workflows/[A-Za-z0-9_.-]+\\.ya?ml$"},
+    "registry_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"},
+    "allow_repository_owner": {"type": "boolean"},
+    "authorized_approver_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 1}
+    }
+  },
+  "anyOf": [
+    {"properties": {"allow_repository_owner": {"const": true}}},
+    {"properties": {"authorized_approver_ids": {"minItems": 1}}}
+  ]
+}

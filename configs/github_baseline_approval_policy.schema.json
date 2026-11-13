@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GitHub Trusted Baseline Approval Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "enabled",
+    "repository",
+    "repository_id",
+    "default_branch",
+    "registry_path",
+    "allow_personal_owner",
+    "trusted_approver_ids",
+    "minimum_approving_reviews"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "enabled": {"const": true},
+    "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+    "repository_id": {"type": "integer", "minimum": 1},
+    "default_branch": {"type": "string", "minLength": 1, "maxLength": 200},
+    "registry_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"},
+    "allow_personal_owner": {"type": "boolean"},
+    "trusted_approver_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 1}
+    },
+    "minimum_approving_reviews": {"type": "integer", "minimum": 1, "maximum": 6}
+  }
+}
