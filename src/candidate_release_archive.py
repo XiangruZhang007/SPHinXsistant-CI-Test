@@ -126,9 +126,12 @@ def _compare_candidate_archive(run, archive):
 
 
 def validate_artifact(artifact_root, *, run_id, attempt, repository_id, head_sha,
-                      artifact_id, artifact_digest):
+                      artifact_id, artifact_digest, repository=REPOSITORY):
     """Validate complete existing run evidence without rebuilding or replaying R2."""
     artifact_digest = _canonical_artifact_digest(artifact_digest)
+    _need(isinstance(repository, str)
+          and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository),
+          'Invalid expected repository')
     root = Path(artifact_root)
     _need(root.is_dir() and not root.is_symlink(), 'Downloaded Actions Artifact directory is missing')
     _need(type(run_id) is int and run_id > 0 and type(attempt) is int and attempt > 0
@@ -234,7 +237,7 @@ def validate_artifact(artifact_root, *, run_id, attempt, repository_id, head_sha
         'archive_kind': 'CI_V2_RESEARCH_CANDIDATE_ARCHIVE',
         'archive_status': 'ARCHIVED_RESEARCH_CANDIDATE',
         'technical_verification': 'PASS',
-        'repository': REPOSITORY,
+        'repository': repository,
         'repository_id': repository_id,
         'workflow': WORKFLOW,
         'run_id': run_id,

@@ -88,8 +88,21 @@ def prepare(project, registry_path, key, baseline_path, proposed_entry, *,
     policy = read_json(policy_path)
     schema2_workflow._research_parent_scope(ref, policy)
 
-    report = research_baseline.verify_baseline(
-        project, baseline_path, ref['build_fingerprint'], expected_id=ref['node_id'])
+    upstream_format = (baseline_path / 'upstream-baseline.json').exists()
+    if upstream_format:
+        # Schema-2 approvals use upstream-baseline.json, not the frozen P4
+        # baseline.json/research-decision.json contract. Reuse its full verifier.
+        from . import upstream_provenance
+        verified = upstream_provenance.verify(
+            project, baseline_path, ref['build_fingerprint'], expected_id=ref['node_id'])
+        _need(verified['receipt']['kind'] == 'RESEARCH_BASELINE'
+              and verified['provenance_type'] == 'GENUINE_UPSTREAM',
+              'GENUINE_RESEARCH_BASELINE_REQUIRED')
+        report = {**verified, 'baseline_id': verified['node_id'],
+                  'package_checksum': verified['receipt']['package_checksum']}
+    else:
+        report = research_baseline.verify_baseline(
+            project, baseline_path, ref['build_fingerprint'], expected_id=ref['node_id'])
     _need(report.get('P4_1_verification') == 'P4_1_VERIFIED',
           'P4_1_BASELINE_QUALIFICATION_REQUIRED')
     checks = {
@@ -107,15 +120,21 @@ def prepare(project, registry_path, key, baseline_path, proposed_entry, *,
           'CANDIDATE_IDENTITY_MISMATCH')
 
     quality = read_json(checked_file(baseline_path, 'quality.json'))
-    decision = read_json(checked_file(baseline_path, 'research-decision.json'))
+    decision = (report if upstream_format else
+                read_json(checked_file(baseline_path, 'research-decision.json')))
     authorization = read_json(checked_file(baseline_path, 'authorization.json'))
     _need(quality.get('status') in ('QUALITY_ACCEPTED', 'QUALITY_REVIEW_REQUIRED'),
           'INVALID_RECORDED_QUALITY_STATUS')
-    _need(decision.get('quality_status') == quality['status']
+    _need((upstream_format or decision.get('quality_status') == quality['status'])
           and authorization.get('quality_status') == quality['status'],
           'QUALITY_STATUS_BINDING_MISMATCH')
+    # Schema-2's frozen authorization schema does not require this field.
+    # Its verified Candidate/approval policy and independent reference already
+    # enforce NOT_AUTHORIZED. Reject an explicit conflicting value regardless.
+    authorization_production = authorization.get(
+        'production_promotion', 'NOT_AUTHORIZED' if upstream_format else None)
     _need(decision.get('production_promotion') == 'NOT_AUTHORIZED'
-          and authorization.get('production_promotion') == 'NOT_AUTHORIZED'
+          and authorization_production == 'NOT_AUTHORIZED'
           and decision.get('automatic_reuse') is False,
           'PRODUCTION_OR_AUTOMATIC_REUSE_RESTRICTION_MISMATCH')
 
