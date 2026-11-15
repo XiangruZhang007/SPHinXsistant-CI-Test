@@ -1,0 +1,64 @@
+name: CI V2 Controlled Historical Candidate Archive
+
+on:
+  workflow_dispatch:
+    inputs:
+      archival_subject_sha256:
+        description: Independently reviewed complete historical archival subject SHA-256
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-v2-historical-archive-${{ github.repository_id }}
+  cancel-in-progress: false
+
+jobs:
+  archive-historical:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    env:
+      PYTHONHASHSEED: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+      GIT_TERMINAL_PROMPT: '0'
+      HISTORICAL_ARCHIVE_DEPLOYMENT_JSON: ${{ vars.HISTORICAL_ARCHIVE_DEPLOYMENT_JSON }}
+      HISTORICAL_ARCHIVE_DEPLOYMENT_SHA256: ${{ vars.HISTORICAL_ARCHIVE_DEPLOYMENT_SHA256 }}
+    steps:
+      - name: Check out reviewed archival implementation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # verified v4
+        with:
+          persist-credentials: false
+      - name: Select interpreter
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # verified v5
+        with:
+          python-version: '3.12.3'
+          architecture: arm64
+      - name: Verify authorization, original evidence and publish immutable archive
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -B scripts/archive_historical_candidate.py
+      - name: Preserve archival operation receipt separately from Release assets
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # verified v4
+        with:
+          name: historical-archive-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/historical-archive-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Report actual publication state
+        if: always()
+        run: |
+          python -B - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / ('historical-archive-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'])
+          path = root / 'audit-error.json' if (root / 'audit-error.json').is_file() else root / 'result.json'
+          state = json.loads(path.read_text())['publication_state'] if path.is_file() else 'NO_DURABLE_RECEIPT_CHECK_STEP_LOGS'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write('Historical publication state: `' + state + '`. Audit upload outcome must be checked separately. No Baseline or production approval.\n')
+          PY

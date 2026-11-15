@@ -302,13 +302,14 @@ def _deterministic_evidence_tar(root, destination):
 
 
 def prepare(artifact_root, destination, *, run_id, attempt, repository_id, head_sha,
-            artifact_id, artifact_digest):
+            artifact_id, artifact_digest, repository=REPOSITORY):
     """Create deterministic publication assets locally; does not contact GitHub."""
     root, dest = Path(artifact_root), Path(destination)
     _need(not dest.exists() and not dest.is_symlink() and dest.parent.is_dir(),
           'Archive output must be a new directory under an existing parent')
     manifest = validate_artifact(root, run_id=run_id, attempt=attempt, repository_id=repository_id,
-                                 head_sha=head_sha, artifact_id=artifact_id, artifact_digest=artifact_digest)
+                                 head_sha=head_sha, artifact_id=artifact_id, artifact_digest=artifact_digest,
+                                 repository=repository)
     dest.mkdir()
     try:
         candidate = root / 'candidate.tar.gz'
