@@ -199,7 +199,7 @@ def run():
             _checkout(deployment)
             _need(_context(deployment, request, policy) == context, 'HOSTED_EXECUTION_CHANGED')
             return context
-        values = {k: request[k] for k in cli.PINS}
+        values = {k: request[k] for k in cli.PINS if k in request}
         values.update(registry_key=request['registry_key'], proposed_entry=request['proposed_entry'],
                       candidate_release=request['candidate_release'], approval_policy_path=policy_path)
         token = next((os.environ[k] for k in ('TRUSTED_RELEASE_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')

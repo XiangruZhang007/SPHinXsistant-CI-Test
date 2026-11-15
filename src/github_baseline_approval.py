@@ -413,6 +413,12 @@ def verify(project, baseline_path, registry_path, registry_key, proposed_entry, 
 
 def _validators(project, baseline_path, entry, approval_policy):
     from . import research_baseline, schema2_workflow, trusted_snapshot
+    from .trusted_baseline_registration import entry_kind, RegistrationError, REGISTRATION_ONLY
+    try:
+        kind = entry_kind(entry)
+    except RegistrationError:
+        raise ApprovalError('INVALID_SCHEMA2_REGISTRY_ENTRY') from None
+    _need(kind != REGISTRATION_ONLY, 'REGISTRATION_ONLY_UNSUPPORTED_BY_PR_APPROVAL')
     ref = entry['reference']
     _need(set(entry) == {'build_policy_path', 'build_policy_sha256',
                          'expected_reference_sha256', 'reference'},

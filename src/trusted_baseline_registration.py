@@ -16,6 +16,9 @@ from .corpus_snapshot import checked_file, digest, file_digest, read_json
 
 ENTRY_FIELDS = {'build_policy_path', 'build_policy_sha256',
                 'expected_reference_sha256', 'reference'}
+REGISTRATION_ONLY_FIELDS = {'entry_kind', 'expected_reference_sha256', 'reference'}
+REGISTRATION_ONLY = 'REGISTRATION_ONLY'
+LEGACY_BUILD_BOUND = 'LEGACY_BUILD_BOUND'
 
 
 class RegistrationError(ValueError):
@@ -33,28 +36,49 @@ def _need(condition, message):
         raise RegistrationError(message)
 
 
+def entry_kind(entry):
+    """Two closed Schema V2 entry forms; never infer a mode from missing fields."""
+    _need(isinstance(entry, dict), 'INVALID_SCHEMA2_REGISTRY_ENTRY')
+    if set(entry) == ENTRY_FIELDS:
+        return LEGACY_BUILD_BOUND
+    _need(set(entry) == REGISTRATION_ONLY_FIELDS
+          and entry['entry_kind'] == REGISTRATION_ONLY
+          and isinstance(entry['reference'], dict)
+          and entry['reference'].get('package_format') == 'schema2-research-baseline',
+          'INVALID_SCHEMA2_REGISTRY_ENTRY')
+    return REGISTRATION_ONLY
+
+
+def validate_build_policy_pin(entry, expected):
+    """A registration-only proposal has no future build-policy pin at all."""
+    kind = entry_kind(entry)
+    if kind == REGISTRATION_ONLY:
+        _need(expected is None, 'UNEXPECTED_BUILD_POLICY_PIN')
+    else:
+        _need(isinstance(expected, str) and re.fullmatch('[0-9a-f]{64}', expected),
+              'INVALID_INDEPENDENT_BUILD_POLICY_PIN')
+        _need(entry['build_policy_sha256'] == expected,
+              'INDEPENDENT_BUILD_POLICY_PIN_MISMATCH')
+    return kind
+
+
 def prepare(project, registry_path, key, baseline_path, proposed_entry, *,
-            expected_reference_sha256, expected_build_policy_sha256,
+            expected_reference_sha256, expected_build_policy_sha256=None,
             expected_workflow_repository, expected_workflow_repository_id):
     """Validate registration inputs without mutating registry or evidence.
 
-    `proposed_entry` must use the existing schema-2 registry entry shape. The
+    `proposed_entry` must use one of the two closed schema-2 entry shapes. The
     returned status is deliberately always BLOCKED until a trusted human
     authorization source is independently configured and implemented.
     """
     project, registry_path, baseline_path = map(Path, (project, registry_path, baseline_path))
     _need(isinstance(key, str) and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', key),
           'INVALID_REGISTRY_KEY')
-    _need(isinstance(proposed_entry, dict) and set(proposed_entry) == ENTRY_FIELDS,
-          'INVALID_SCHEMA2_REGISTRY_ENTRY')
+    kind = validate_build_policy_pin(proposed_entry, expected_build_policy_sha256)
     _need(isinstance(expected_reference_sha256, str)
           and len(expected_reference_sha256) == 64
           and all(c in '0123456789abcdef' for c in expected_reference_sha256),
           'INVALID_INDEPENDENT_REFERENCE_PIN')
-    _need(isinstance(expected_build_policy_sha256, str)
-          and len(expected_build_policy_sha256) == 64
-          and all(c in '0123456789abcdef' for c in expected_build_policy_sha256),
-          'INVALID_INDEPENDENT_BUILD_POLICY_PIN')
     _need(isinstance(expected_workflow_repository, str)
           and type(expected_workflow_repository_id) is int
           and expected_workflow_repository_id > 0,
@@ -80,15 +104,15 @@ def prepare(project, registry_path, key, baseline_path, proposed_entry, *,
     }):
         trusted_snapshot.validate_reference(ref, expected_ref_sha, remote=True)
 
-    policy_path = checked_file(project, proposed_entry['build_policy_path'])
-    _need(proposed_entry['build_policy_sha256'] == expected_build_policy_sha256,
-          'INDEPENDENT_BUILD_POLICY_PIN_MISMATCH')
-    _need(file_digest(policy_path) == expected_build_policy_sha256,
-          'BUILD_POLICY_CHECKSUM_MISMATCH')
-    policy = read_json(policy_path)
-    schema2_workflow._research_parent_scope(ref, policy)
+    if kind == LEGACY_BUILD_BOUND:
+        policy_path = checked_file(project, proposed_entry['build_policy_path'])
+        _need(file_digest(policy_path) == expected_build_policy_sha256,
+              'BUILD_POLICY_CHECKSUM_MISMATCH')
+        policy = read_json(policy_path)
+        schema2_workflow._research_parent_scope(ref, policy)
 
     upstream_format = (baseline_path / 'upstream-baseline.json').exists()
+    _need(kind != REGISTRATION_ONLY or upstream_format, 'SCHEMA2_BASELINE_REQUIRED')
     if upstream_format:
         # Schema-2 approvals use upstream-baseline.json, not the frozen P4
         # baseline.json/research-decision.json contract. Reuse its full verifier.

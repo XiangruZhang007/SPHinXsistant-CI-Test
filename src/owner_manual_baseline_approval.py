@@ -216,7 +216,7 @@ def _github_identity(client, policy, context):
 
 def verify(project, baseline_path, registry_path, registry_key, proposed_entry, *,
            policy_path, policy_sha256, expected_reference_sha256,
-           expected_build_policy_sha256, q1_status, context, client,
+           expected_build_policy_sha256=None, q1_status, context, client,
            registration_subject=None):
     """Verify one explicit owner-triggered decision; never mutate Registry."""
     result = {
@@ -262,6 +262,8 @@ def verify(project, baseline_path, registry_path, registry_key, proposed_entry, 
 
         from . import trusted_baseline_registration as registration
         try:
+            if registration.entry_kind(proposed_entry) == registration.REGISTRATION_ONLY:
+                _need(registration_subject is not None, 'REGISTRATION_SUBJECT_REQUIRED')
             preflight = registration.prepare(
                 project, registry_path, registry_key, baseline_path, proposed_entry,
                 expected_reference_sha256=expected_reference_sha256,

@@ -63,6 +63,13 @@ def plan(project, registry, key, revisions):
     """Stdlib-only preflight before parser environment provisioning."""
     c.validate_request('formal', key, revisions)
     entry = trust.registry_reference(registry, key)
+    from .trusted_baseline_registration import entry_kind, RegistrationError, REGISTRATION_ONLY
+    try:
+        kind = entry_kind(entry)
+    except RegistrationError:
+        raise c.GateError('INVALID_REFERENCE', 'Unsupported Registry entry contract') from None
+    c.need(kind != REGISTRATION_ONLY, 'AUTHORIZATION_FAILED',
+           'Registration-only Parent has no separately reviewed build authorization')
     ref = entry['reference']
     policy = read_json(checked_file(project, entry['build_policy_path']))
     c.need(file_digest(checked_file(project, entry['build_policy_path'])) == entry['build_policy_sha256'],

@@ -24,7 +24,8 @@ def main(argv=None):
     parser.add_argument('--registry-key', required=True)
     parser.add_argument('--entry', type=Path, required=True)
     parser.add_argument('--expected-reference-sha256', required=True)
-    parser.add_argument('--expected-build-policy-sha256', required=True)
+    parser.add_argument('--expected-build-policy-sha256',
+                        help='Required for legacy entries; forbidden for registration-only entries')
     parser.add_argument('--q1-status', required=True, choices=(
         'QUALIFIED', 'Q1_NOT_QUALIFIED_FOR_VERSION_PAIR',
         'NOT_RECORDED_IN_EXISTING_BASELINE_QUALITY_SCHEMA'))

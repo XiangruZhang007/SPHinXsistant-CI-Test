@@ -35,6 +35,8 @@ def select_parent(project, registry_path, key, expected_reference_sha256, parent
         seen.add(identifier)
     entry = registry['baselines'].get(key)
     c.need(entry is not None, 'BOOTSTRAP_REQUIRED', 'Explicit Parent key is unavailable; no bootstrap fallback')
+    c.need('entry_kind' not in entry, 'AUTHORIZATION_FAILED',
+           'Registration-only or unsupported entry kind cannot authorize a local build')
     ref = entry['reference']
     c.need(all(isinstance(ref.get(name), dict) for name in ('upstreams', 'authorization', 'storage')),
            'INVALID_REFERENCE', 'Malformed reference bindings/authorization/storage')

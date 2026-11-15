@@ -19,11 +19,11 @@ def main(argv=None):
     parser.add_argument('--key', required=True)
     parser.add_argument('--baseline', type=Path, required=True)
     parser.add_argument('--entry', type=Path, required=True,
-                        help='JSON object using the existing schema-2 registry entry shape')
+                        help='JSON object using either explicitly supported schema-2 entry form')
     parser.add_argument('--expected-reference-sha256', required=True,
                         help='Independent pin, supplied outside the proposed entry')
-    parser.add_argument('--expected-build-policy-sha256', required=True,
-                        help='Independent pin, supplied outside the proposed entry')
+    parser.add_argument('--expected-build-policy-sha256',
+                        help='Required for legacy entries; forbidden for registration-only entries')
     parser.add_argument('--workflow-repository', required=True)
     parser.add_argument('--workflow-repository-id', required=True, type=int)
     args = parser.parse_args(argv)

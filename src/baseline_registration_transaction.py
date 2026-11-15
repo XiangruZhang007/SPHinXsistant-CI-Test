@@ -165,8 +165,11 @@ def _duplicate_check(project, registry, subject, work, token):
     seen_nodes, seen_candidates = set(), set()
     for number, (key, entry) in enumerate(registry['baselines'].items()):
         _need(key != subject['registry_key'], 'DUPLICATE_REGISTRY_KEY')
-        _need(isinstance(entry, dict) and set(entry) == set(subject['registry_entry']),
-              'INVALID_HISTORICAL_REGISTRY_ENTRY')
+        # Each historical entry keeps its own explicitly supported contract.
+        try:
+            evidence.registration.entry_kind(entry)
+        except evidence.registration.RegistrationError:
+            raise TransactionError('INVALID_HISTORICAL_REGISTRY_ENTRY') from None
         ref = entry['reference']
         transport.validate_reference(ref, entry['expected_reference_sha256'], remote=True)
         node = ref['node_id']
@@ -194,7 +197,7 @@ def _approval(project, authoritative, policy_path, policy_sha, baseline, subject
     result = owner.verify(project, baseline, authoritative, subject['registry_key'], entry,
         policy_path=policy_path, policy_sha256=policy_sha,
         expected_reference_sha256=entry['expected_reference_sha256'],
-        expected_build_policy_sha256=entry['build_policy_sha256'],
+        expected_build_policy_sha256=entry.get('build_policy_sha256'),
         q1_status=subject['baseline']['q1_status'], context=context, client=client,
         registration_subject=subject)
     _need(result.get('status') == 'OWNER_APPROVAL_VERIFIED'
@@ -223,7 +226,7 @@ def _complete(fd, prepared, transaction_id):
 
 def register(project, isolation_directory, *, registry_key, proposed_entry,
              candidate_release, expected_candidate_release_sha256,
-             expected_reference_sha256, expected_build_policy_sha256,
+             expected_reference_sha256, expected_build_policy_sha256=None,
              expected_registry_sha256, approval_policy_path, approval_policy_sha256,
              token=None):
     """Ordinary local entry point; execution authorization remains unavailable.
@@ -243,7 +246,7 @@ def register(project, isolation_directory, *, registry_key, proposed_entry,
 
 def _register(project, isolation_directory, *, registry_key, proposed_entry,
               candidate_release, expected_candidate_release_sha256,
-              expected_reference_sha256, expected_build_policy_sha256,
+              expected_reference_sha256, expected_build_policy_sha256=None,
               expected_registry_sha256, approval_policy_path, approval_policy_sha256,
               token, _execution_context):
     """One internal transaction core, also used by the reviewed Hosted adapter.

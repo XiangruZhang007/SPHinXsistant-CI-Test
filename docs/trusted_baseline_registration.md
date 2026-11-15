@@ -1,5 +1,10 @@
 # Trusted research Baseline registration preparation
 
+Step 2C.3-C1-T1 explicitly adds a closed registration-only entry form while
+preserving the legacy contract below. See
+[registration/build separation](registration_build_authorization_separation.md)
+for exact fields, version 2 Requests, build refusals and approval compatibility.
+
 This step adds a **read-only, fail-closed preflight** for a proposed entry in
 the existing schema-2 registry. It does not register a Baseline. The registry
 file is read only and remains unchanged.

@@ -23,6 +23,7 @@ PINS = {'expected_candidate_release_sha256', 'expected_reference_sha256',
         'expected_build_policy_sha256', 'expected_registry_sha256', 'approval_policy_sha256'}
 REQUEST_FIELDS = PINS | {'schema_version', 'registry_key', 'proposed_entry',
                         'candidate_release', 'approval_policy_path'}
+REGISTRATION_REQUEST_FIELDS = REQUEST_FIELDS - {'expected_build_policy_sha256'}
 STORAGE_FIELDS = {'kind', 'repository', 'repository_id', 'release_id', 'asset_id',
                   'tag', 'asset_name', 'asset_size', 'immutable_required'}
 REFERENCE_FIELDS = {'schema_version', 'package_format', 'accepted_package_schema', 'node_id',
@@ -89,19 +90,26 @@ def load_request(path, expected_sha):
     require(len(raw) <= evidence.LIMIT and hashlib.sha256(raw).hexdigest() == expected_sha,
             'REQUEST_SHA256_MISMATCH')
     request = evidence._json(raw)
-    fields(request, REQUEST_FIELDS, 'INVALID_REQUEST_FIELDS')
-    require(type(request['schema_version']) is int and request['schema_version'] == 1,
+    require(isinstance(request, dict) and type(request.get('schema_version')) is int
+            and request['schema_version'] in (1, 2),
             'UNSUPPORTED_REQUEST_SCHEMA')
-    require(all(evidence._sha(request[k]) for k in PINS), 'INVALID_REQUEST_PIN')
+    registration_only = request['schema_version'] == 2
+    names = REGISTRATION_REQUEST_FIELDS if registration_only else REQUEST_FIELDS
+    fields(request, names, 'INVALID_REQUEST_FIELDS')
+    pins = PINS - {'expected_build_policy_sha256'} if registration_only else PINS
+    require(all(evidence._sha(request[k]) for k in pins), 'INVALID_REQUEST_PIN')
     require(isinstance(request['registry_key'], str)
             and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', request['registry_key']),
             'INVALID_REGISTRY_KEY')
     entry = request['proposed_entry']
-    fields(entry, evidence.registration.ENTRY_FIELDS, 'INVALID_ENTRY_FIELDS')
-    require(entry['expected_reference_sha256'] == request['expected_reference_sha256']
-            and entry['build_policy_sha256'] == request['expected_build_policy_sha256'],
+    kind = evidence.registration.entry_kind(entry)
+    require((kind == evidence.registration.REGISTRATION_ONLY) == registration_only,
+            'REQUEST_ENTRY_CONTRACT_MISMATCH')
+    require(entry['expected_reference_sha256'] == request['expected_reference_sha256'],
             'ENTRY_PIN_MISMATCH')
-    config_file(entry['build_policy_path'])
+    evidence.registration.validate_build_policy_pin(entry, request.get('expected_build_policy_sha256'))
+    if not registration_only:
+        config_file(entry['build_policy_path'])
     ref = entry['reference']
     require(isinstance(ref, dict) and set(ref) in
             (REFERENCE_FIELDS, REFERENCE_FIELDS | {'candidate_id'}), 'INVALID_REFERENCE_FIELDS')
@@ -154,7 +162,7 @@ def _invoke(args):
         return transaction.recover(PROJECT, args.isolation_directory,
                                    transaction_id=args.transaction_id)
     request, policy = load_request(args.request, args.request_sha256)
-    values = {k: request[k] for k in PINS}
+    values = {k: request[k] for k in PINS if k in request}
     values.update(registry_key=request['registry_key'], proposed_entry=request['proposed_entry'],
                   candidate_release=request['candidate_release'])
     token = next((os.environ[k] for k in ('TRUSTED_RELEASE_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
@@ -194,7 +202,8 @@ def main(argv=None):
                 0 if status in ('EVIDENCE_VERIFIED', 'COMPLETED') else 1)
     except Exception as error:
         reason = str(error) if isinstance(error, (InputError, evidence.VerificationError,
-                                                owner.OwnerApprovalError)) else ''
+                                                owner.OwnerApprovalError,
+                                                evidence.registration.RegistrationError)) else ''
         if not re.fullmatch(r'[A-Z][A-Z0-9_]{0,100}', reason):
             reason = 'INVALID_INPUT_OR_OPERATION_FAILED'
         result = {'status': 'BLOCKED', 'registration': 'NOT_PERFORMED',

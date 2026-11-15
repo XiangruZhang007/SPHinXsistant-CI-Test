@@ -1,5 +1,12 @@
 # Minimal isolated registration CLI (Step 2C.2-C2)
 
+The legacy Request below remains schema version 1. Step 2C.3-C1-T1 adds a
+strict version 2 Request for explicit registration-only entries, without any
+`expected_build_policy_sha256` field. See
+[registration/build separation](registration_build_authorization_separation.md).
+The command names, independent request hash and deny-by-default local boundary
+are unchanged.
+
 `scripts/register_trusted_baseline.py` provides three library-backed commands.
 It derives the project root from its own location and never accepts `--project`,
 an authoritative Registry destination, actor IDs, saved approvals, tokens, or

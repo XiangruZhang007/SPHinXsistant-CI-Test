@@ -133,12 +133,12 @@ def _candidate(reference, expected_sha, work, token):
 
 def verify(project, registry_path, registry_key, proposed_entry, *,
            candidate_release, expected_candidate_release_sha256,
-           expected_reference_sha256, expected_build_policy_sha256,
+           expected_reference_sha256, expected_build_policy_sha256=None,
            expected_registry_sha256, approval_policy_sha256, token=None):
     """Return verified evidence and an unsigned future approval subject.
 
-    No Owner verification is performed: the current adapter cannot yet bind
-    this complete subject. Success is evidence verification, never eligibility.
+    No Owner verification is performed here. Success is evidence verification,
+    never eligibility or authorization for a future Candidate build.
     Failures raise VerificationError. This API has no simulation/bypass option.
     """
     phase = 'INPUT_VALIDATION_FAILED'
@@ -148,16 +148,15 @@ def verify(project, registry_path, registry_key, proposed_entry, *,
         proposed_entry = _json(canonical(proposed_entry))
         candidate_release = _json(canonical(candidate_release))
         _need(all(_sha(v) for v in (expected_candidate_release_sha256,
-              expected_reference_sha256, expected_build_policy_sha256,
+              expected_reference_sha256,
               expected_registry_sha256, approval_policy_sha256)), 'INVALID_INDEPENDENT_PIN')
-        _need(set(proposed_entry) == registration.ENTRY_FIELDS, 'INVALID_REGISTRY_ENTRY')
+        kind = registration.validate_build_policy_pin(proposed_entry, expected_build_policy_sha256)
         _read(registry_path)
         registry_raw = registry_path.read_bytes()
         _need(hashlib.sha256(registry_raw).hexdigest() == expected_registry_sha256,
               'STALE_REGISTRY')
         ref = proposed_entry['reference']
-        _need(proposed_entry['expected_reference_sha256'] == expected_reference_sha256
-              and proposed_entry['build_policy_sha256'] == expected_build_policy_sha256,
+        _need(proposed_entry['expected_reference_sha256'] == expected_reference_sha256,
               'ENTRY_PIN_MISMATCH')
         transport.validate_reference(ref, expected_reference_sha256, remote=True)
         _need(ref['package_format'] == 'schema2-research-baseline', 'P4_1_BASELINE_REQUIRED')
@@ -244,9 +243,10 @@ def verify(project, registry_path, registry_key, proposed_entry, *,
             _need(registry_path.read_bytes() == registry_raw, 'REGISTRY_CHANGED_DURING_VERIFICATION')
             # Recheck the external build policy after qualification as prepare()
             # checked it earlier. No volatile temporary paths enter the subject.
-            from .corpus_snapshot import checked_file
-            _need(file_digest(checked_file(project, proposed_entry['build_policy_path']))
-                  == expected_build_policy_sha256, 'BUILD_POLICY_CHANGED_DURING_VERIFICATION')
+            if kind == registration.LEGACY_BUILD_BOUND:
+                from .corpus_snapshot import checked_file
+                _need(file_digest(checked_file(project, proposed_entry['build_policy_path']))
+                      == expected_build_policy_sha256, 'BUILD_POLICY_CHANGED_DURING_VERIFICATION')
             return {'status': 'EVIDENCE_VERIFIED', 'execution': 'NO_FRESH_REPLAY',
                 'registration_subject': subject, 'registration_subject_sha256': digest(subject),
                 'authorization': 'NOT_VERIFIED', 'registration': 'NOT_PERFORMED',

@@ -69,7 +69,8 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_research_parent_without_bound_transition_policy_is_rejected(self):
         ref = {'package_format': 'schema2-research-baseline'}
-        entry = {'reference': ref, 'build_policy_path': 'policy.json', 'build_policy_sha256': 'pinned'}
+        entry = {'reference': ref, 'expected_reference_sha256': 'fixture-pin',
+                 'build_policy_path': 'policy.json', 'build_policy_sha256': 'pinned'}
         revisions = c.read(c.LOCK)['upstreams']
         policy = {'scope': {'target_upstreams': revisions}, 'provenance_type': 'GENUINE_UPSTREAM'}
         with patch.object(t, 'registry_reference', return_value=entry), patch.object(w, 'checked_file', return_value=Path('dummy')), \
@@ -83,7 +84,8 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_qualified_plan_revalidates_scope(self):
         ref = {'package_format': 'p2-snapshot-v1'}
-        entry = {'reference': ref, 'build_policy_path': 'policy.json', 'build_policy_sha256': 'pinned'}
+        entry = {'reference': ref, 'expected_reference_sha256': 'fixture-pin',
+                 'build_policy_path': 'policy.json', 'build_policy_sha256': 'pinned'}
         revisions = c.read(c.LOCK)['upstreams']
         policy = {'scope': {'target_upstreams': revisions}, 'provenance_type': 'GENUINE_UPSTREAM'}
         with patch.object(t, 'registry_reference', return_value=entry), patch.object(w, 'checked_file', return_value=Path('dummy')), \
