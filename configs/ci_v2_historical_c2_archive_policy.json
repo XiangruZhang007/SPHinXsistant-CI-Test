@@ -1,0 +1,1 @@
+{"allow_repository_owner":true,"authorized_approver_ids":[],"default_branch":"ci-upstream-refresh","enabled":true,"purpose":"HISTORICAL_CANDIDATE_ARCHIVAL","repository":"XiangruZhang007/SPHinXsistant-CI-Test","repository_id":1455203884,"schema_version":1,"workflow_path":".github/workflows/ci_v2_historical_archive.yml"}
