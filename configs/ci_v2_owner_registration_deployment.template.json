@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "repository": null,
+  "repository_id": null,
+  "default_branch": null,
+  "workflow_path": ".github/workflows/ci_v2_owner_registration.yml",
+  "implementation_revision": null,
+  "request_path": null,
+  "request_sha256": null,
+  "approval_policy_path": null,
+  "approval_policy_sha256": null
+}

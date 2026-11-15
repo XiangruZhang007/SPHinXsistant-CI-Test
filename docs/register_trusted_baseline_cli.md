@@ -133,9 +133,9 @@ the CLI. Successful recovery tests use previously simulated isolated transaction
 these cannot be interpreted as real Owner approval. No real asset download,
 genuine corpus build, genuine R2 evaluation or Hosted execution is performed.
 
-Step 2C.3 still needs a reviewed dedicated manual workflow, independently fixed
-deployment policy/code provenance, actual immutable Candidate and P4.1 asset
-references, and a separately reviewed execution-trust integration. Initial Hosted
-acceptance must target an isolated Registry copy. No workflow, trust provider,
-live Registry mutation, automatic Parent selection, or production delivery is
-implemented by this CLI.
+The companion Step 2C.3-B implementation supplies a dedicated manual workflow
+and separate execution entry; see `hosted_registration.md`. Actual independently
+fixed deployment configuration, immutable Candidate/P4.1 assets and genuine
+Hosted acceptance remain prerequisites. Initial acceptance targets an isolated
+copy. This ordinary CLI neither enables Hosted authority nor writes the live
+Registry, selects a Parent automatically, or delivers production corpora.

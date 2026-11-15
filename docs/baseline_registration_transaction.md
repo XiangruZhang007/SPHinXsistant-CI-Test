@@ -1,10 +1,11 @@
 # Isolated Registry transaction (Step 2C.2-B)
 
 This is a library implementation and offline test harness, not a live Registry
-writer. The real execution-trust integration is deliberately **unconfigured**.
-Ordinary registration calls return `BLOCKED`; there is no CLI, workflow change,
-environment switch, approval JSON input, or application option that enables
-simulated authorization. Successful tests do not establish real Owner approval.
+writer. Ordinary registration calls return `BLOCKED`; there is no environment
+switch, approval JSON input, or application option enabling simulated authority.
+The subsequent CLI and separately reviewed Hosted adapter are documented in
+`register_trusted_baseline_cli.md` and `hosted_registration.md`. Hosted deployment
+configuration remains absent. Successful tests do not establish real Owner approval.
 
 ## Library interfaces
 
@@ -46,12 +47,12 @@ does not consult an enabling environment variable or accept a context argument.
 Tests replace this private function, plus the HTTP/qualification dependencies,
 with explicit synthetic fixtures. No trusted execution provider is fabricated.
 
-Real integration requires a separately reviewed trusted-workflow entry point,
-fixed workflow/policy provenance and an execution-context trust boundary. The
-existing policy check is necessary but cannot bootstrap its own authority.
-Until that integration exists, real registration remains blocked even with
-valid GitHub run metadata. No protected-branch or independent-review guarantee
-is inferred from GitHub Free repository ownership.
+Step 2C.3-B adds a separate reviewed Hosted entry using the same private
+transaction core, with fixed workflow/code/policy provenance and repeated API
+checks. The ordinary entry keeps its denying guard unchanged. Deployment pins
+remain required and have not been configured; policy checks cannot bootstrap
+their own authority. No protected-branch or independent-review guarantee is
+inferred from GitHub Free repository ownership.
 
 ## Evidence lifecycle and historical identities
 
@@ -158,7 +159,7 @@ qualification/authority fixtures remain synthetic; no genuine C1/C2 execution,
 Owner approval, Release download or publication is performed. Existing miniature
 Parent anchor tests exercise their original verifier independently.
 
-Remaining integration work: establish trusted workflow execution and independent
-policy provenance; expose only the reviewed entry point; add a CLI separately if
-authorized; and define a later controlled live-Registry update. This stage does
-not enable any of those operations or automatically select the next Parent.
+Subsequent CLI and Hosted implementation exist; remaining work includes actual
+independent deployment configuration/assets and genuine Hosted acceptance, then
+a separately authorized live-Registry update. This library never automatically
+selects the next Parent. See the later documents for current integration scope.

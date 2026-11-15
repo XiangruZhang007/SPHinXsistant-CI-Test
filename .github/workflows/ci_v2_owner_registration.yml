@@ -1,0 +1,117 @@
+name: CI V2 Owner Isolated Registration
+
+# Inactive until a maintainer independently reviews and pins deployment inputs.
+on:
+  workflow_dispatch:
+    inputs:
+      registry_key:
+        description: Exact reviewed proposed Registry key
+        required: true
+        type: string
+      baseline_id:
+        description: Exact P4.1-approved Research Baseline ID
+        required: true
+        type: string
+      candidate_id:
+        description: Exact original Candidate ID
+        required: true
+        type: string
+      corpus_sha256:
+        description: Independently verified Corpus SHA-256
+        required: true
+        type: string
+      registry_entry_sha256:
+        description: Canonical proposed Registry entry SHA-256
+        required: true
+        type: string
+      registration_subject_sha256:
+        description: Complete independently reviewed registration subject SHA-256
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: owner-isolated-registration-${{ github.repository_id }}
+  cancel-in-progress: false
+
+jobs:
+  isolated-registration:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      PYTHONHASHSEED: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_CONFIG_NOSYSTEM: '1'
+      OWNER_REGISTRATION_DEPLOYMENT_JSON: ${{ vars.OWNER_REGISTRATION_DEPLOYMENT_JSON }}
+      OWNER_REGISTRATION_DEPLOYMENT_SHA256: ${{ vars.OWNER_REGISTRATION_DEPLOYMENT_SHA256 }}
+    steps:
+      - name: Check out the exact dispatch commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # verified v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Select frozen verification interpreter
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # verified v5
+        with:
+          python-version: '3.12.3'
+          architecture: arm64
+      - name: Require independent maintainer deployment pins
+        run: |
+          python -B - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          raw = os.environ.get('OWNER_REGISTRATION_DEPLOYMENT_JSON', '')
+          pin = os.environ.get('OWNER_REGISTRATION_DEPLOYMENT_SHA256', '')
+          if not raw or hashlib.sha256(raw.encode()).hexdigest() != pin:
+              result = {'status': 'BLOCKED', 'reason': 'HOSTED_DEPLOYMENT_NOT_CONFIGURED',
+                        'registry_committed': False, 'registration': 'NOT_PERFORMED',
+                        'production_promotion': 'NOT_AUTHORIZED'}
+              root = Path(os.environ['RUNNER_TEMP']) / ('owner-registration-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'])
+              root.mkdir(mode=0o700)
+              raw_result = (json.dumps(result, sort_keys=True, indent=2) + '\n').encode()
+              (root / 'result.json').write_bytes(raw_result)
+              (root / 'checksums.json').write_text(json.dumps({'result.json': hashlib.sha256(raw_result).hexdigest()}) + '\n')
+              print(json.dumps(result))
+              raise SystemExit(1)
+          PY
+      - name: Prepare the pinned verification dependencies only
+        run: |
+          git -c credential.helper= clone --no-checkout https://github.com/Consiliency/treesitter-chunker.git tools/treesitter-chunker
+          git -C tools/treesitter-chunker checkout --detach fb70922076c773d1865176329a03f67ff893fd90
+          python -m venv tools/treesitter-chunker/.venv
+          tools/treesitter-chunker/.venv/bin/python -m pip install -r configs/ci_v2_parser_requirements.txt
+          tools/treesitter-chunker/.venv/bin/python -m pip install -c configs/ci_v2_parser_requirements.txt -e tools/treesitter-chunker
+      - name: Verify Owner approval and transact on an isolated Registry copy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRUSTED_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: tools/treesitter-chunker/.venv/bin/python -B scripts/register_trusted_baseline_hosted.py
+      - name: Preserve isolated result and audit evidence on success or failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # verified v4
+        with:
+          name: ci-v2-owner-registration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/owner-registration-${{ github.run_id }}-${{ github.run_attempt }}/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Report actual isolated transaction state
+        if: always()
+        run: |
+          python -B - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / ('owner-registration-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'])
+          path = root / 'result.json'
+          if path.is_file():
+              result = json.loads(path.read_text())
+              summary = {k: result.get(k) for k in ('status', 'registry_committed', 'transaction_id',
+                  'authoritative_registry_unchanged', 'reason', 'production_promotion')}
+          else:
+              summary = {'status': 'NO_TRANSACTION_RESULT', 'production_promotion': 'NOT_AUTHORIZED'}
+          Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(json.dumps(summary, indent=2) + '\n')
+          PY

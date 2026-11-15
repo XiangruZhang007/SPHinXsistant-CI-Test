@@ -1,4 +1,4 @@
-"""Isolated Registry transactions, with no configured real execution authority.
+"""Isolated Registry transactions with a deny-by-default local entry point.
 
 Only tests replace _trusted_dispatch_context. There is deliberately no runtime
 switch for that missing trust integration. GitHub actor evidence is necessary
@@ -226,10 +226,31 @@ def register(project, isolation_directory, *, registry_key, proposed_entry,
              expected_reference_sha256, expected_build_policy_sha256,
              expected_registry_sha256, approval_policy_path, approval_policy_sha256,
              token=None):
-    """Attempt an isolated transaction; currently BLOCKED outside mocked tests.
+    """Ordinary local entry point; execution authorization remains unavailable.
 
     No caller-supplied approval result, context, or simulation flag is accepted.
     The existing policy locates the authoritative Registry, which is read only.
+    """
+    return _register(project, isolation_directory, registry_key=registry_key,
+        proposed_entry=proposed_entry, candidate_release=candidate_release,
+        expected_candidate_release_sha256=expected_candidate_release_sha256,
+        expected_reference_sha256=expected_reference_sha256,
+        expected_build_policy_sha256=expected_build_policy_sha256,
+        expected_registry_sha256=expected_registry_sha256,
+        approval_policy_path=approval_policy_path, approval_policy_sha256=approval_policy_sha256,
+        token=token, _execution_context=_trusted_dispatch_context)
+
+
+def _register(project, isolation_directory, *, registry_key, proposed_entry,
+              candidate_release, expected_candidate_release_sha256,
+              expected_reference_sha256, expected_build_policy_sha256,
+              expected_registry_sha256, approval_policy_path, approval_policy_sha256,
+              token, _execution_context):
+    """One internal transaction core, also used by the reviewed Hosted adapter.
+
+    This is not a public context-selection API. Python private functions are not
+    a sandbox against arbitrary same-privilege code. Hosted authority relies on
+    the reviewed deployment/code trust root and repeated Owner verification.
     """
     result = {'status': 'BLOCKED', 'registry_committed': False, 'registration': 'NOT_PERFORMED',
               'scope': 'ISOLATED_COPY_ONLY', 'production_promotion': 'NOT_AUTHORIZED'}
@@ -252,7 +273,7 @@ def register(project, isolation_directory, *, registry_key, proposed_entry,
                         _validated_audit(fd, name[:64])
                 registry = _registry(old)
                 _need(registry_key not in registry['baselines'], 'DUPLICATE_REGISTRY_KEY')
-                context = _trusted_dispatch_context()
+                context = _execution_context()
                 verified = evidence.verify(project, authoritative, registry_key, proposed_entry,
                     candidate_release=candidate_release,
                     expected_candidate_release_sha256=expected_candidate_release_sha256,
@@ -299,6 +320,7 @@ def register(project, isolation_directory, *, registry_key, proposed_entry,
                                 _serialize({'transaction_id': transaction_id, **prepared}))
                     stage = _stage(fd, new, 'registry')
                     # Recheck API/policy/P4.1 state immediately before commit.
+                    _need(_execution_context() == context, 'EXECUTION_CONTEXT_CHANGED_BEFORE_COMMIT')
                     latest = _approval(project, authoritative, approval_policy_path,
                         approval_policy_sha256, work / 'baseline', subject, context, client)
                     _need(latest == approval, 'APPROVAL_CHANGED_BEFORE_COMMIT')
