@@ -16,7 +16,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     plan = commands.add_parser('plan')
-    for name in ('key', 'sys-revision', 'sim-revision'):
+    selection = plan.add_mutually_exclusive_group(required=True)
+    selection.add_argument('--key')
+    selection.add_argument('--auto-parent', action='store_true',
+                           help='Select the unique registered Parent with exact build authorization')
+    for name in ('sys-revision', 'sim-revision'):
         plan.add_argument('--' + name, required=True)
     plan.add_argument('--output', type=Path, required=True)
     execute = commands.add_parser('execute-plan')
@@ -49,7 +53,9 @@ def main(argv=None):
             result = build_next(P, a.registry, a.key, a.expected_reference_sha256, a.parent,
                 a.base_source, a.target_source, a.output, a.policy, a.expected_policy_sha256)
         elif a.command == 'plan':
-            result = w.plan(P, c.read(t.REGISTRY), a.key, {'SPHinXsys': a.sys_revision, 'SPHinXsim': a.sim_revision})
+            revisions = {'SPHinXsys': a.sys_revision, 'SPHinXsim': a.sim_revision}
+            result = (w.plan_auto(P, t.REGISTRY, revisions) if a.auto_parent else
+                      w.plan(P, c.read(t.REGISTRY), a.key, revisions))
             a.output.mkdir(exist_ok=False, parents=True)
             c.write(a.output / 'plan.json', result)
         elif a.command == 'execute-plan':

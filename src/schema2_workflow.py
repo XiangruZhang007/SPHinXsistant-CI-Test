@@ -81,6 +81,12 @@ def plan(project, registry, key, revisions):
             'registry_entry_sha256': digest(entry), 'status': 'SCHEMA2_MANUAL_PLAN', **c.RESTRICTIONS}
 
 
+def plan_auto(project, registry_path, revisions):
+    """Explicit metadata-only selection; never creates build authorization."""
+    from .trusted_parent_selection import select_parent
+    return select_parent(project, registry_path, revisions)
+
+
 def _verification(project, candidate, full, directory, quality, lock, output):
     from . import upstream_provenance as u
     from .approval_evidence import frozen_implementation, rescore, same, replay, BENCHMARK
@@ -269,8 +275,13 @@ def execute_plan(project, plan_path, work, output, *, q1_inputs=None, q1_sha=Non
            'q1_inputs and q1_sha must be provided together')
     project, work, output = Path(project), Path(work), Path(output)
     planned = read_json(plan_path); registry = read_json(trust.REGISTRY)
-    current = plan(project, registry, planned['key'], planned['upstreams'])
+    automatic = 'selection' in planned or planned.get('status') == 'SCHEMA2_AUTO_PLAN'
+    current = (plan_auto(project, trust.REGISTRY, planned['upstreams']) if automatic else
+               plan(project, registry, planned['key'], planned['upstreams']))
     c.need(current == planned, 'INVALID_REFERENCE', 'Registry/authorization changed after planning')
+    if automatic:
+        c.need(digest(registry['baselines'][planned['key']]) == planned['registry_entry_sha256'],
+               'INVALID_REFERENCE', 'Registry changed while revalidating selection')
     c.frozen_runtime(project)
     c.need(shutil.disk_usage(work.parent).free >= 8 * 1024**3, 'RESOURCE_LIMIT', 'At least 8 GiB free required')
     work.mkdir(exist_ok=False)
@@ -289,8 +300,14 @@ def execute_plan(project, plan_path, work, output, *, q1_inputs=None, q1_sha=Non
             dest = work / label / 'repos' / repo; dest.parent.mkdir(parents=True, exist_ok=True)
             subprocess.run(['git', '-c', 'credential.helper=', 'clone', '--no-checkout', url, str(dest)], check=True)
             subprocess.run(['git', '-C', str(dest), 'checkout', '--detach', revisions[repo]], check=True)
+    if automatic:
+        c.need(plan_auto(project, trust.REGISTRY, planned['upstreams']) == planned,
+               'INVALID_REFERENCE', 'Automatic selection changed before construction')
     result = run_local(project, work / 'parent.tar.gz', work / 'base-source', work / 'target-source', output,
         ref, entry['expected_reference_sha256'], checked_file(project, entry['build_policy_path']),
         entry['build_policy_sha256'], work / 'parent-rows.json', q1_inputs=q1_inputs, q1_sha=q1_sha)
+    if automatic:
+        c.need(plan_auto(project, trust.REGISTRY, planned['upstreams']) == planned,
+               'INVALID_REFERENCE', 'Automatic selection changed during execution')
     c.package_candidate(output, output.parent / 'candidate.tar.gz')
     return result
