@@ -5,9 +5,15 @@ on:
   workflow_dispatch:
     inputs:
       baseline_key:
-        description: Reviewed schema-2 baseline registry key (configuration required)
-        required: true
+        description: Reviewed Registry key for manual mode; leave empty when auto_parent is true
+        required: false
+        default: ''
         type: string
+      auto_parent:
+        description: Automatically select the uniquely authorized Trusted Parent
+        required: false
+        type: boolean
+        default: false
       sys_revision:
         description: Exact SPHinXsys commit (moving refs are rejected)
         required: true
@@ -45,6 +51,7 @@ jobs:
       GIT_TERMINAL_PROMPT: '0'
       GIT_CONFIG_NOSYSTEM: '1'
       BASELINE_KEY: ${{ inputs.baseline_key }}
+      AUTO_PARENT: ${{ inputs.auto_parent }}
       SYS_REVISION: ${{ inputs.sys_revision }}
       SIM_REVISION: ${{ inputs.sim_revision }}
       Q1_TRANSPORT_CONFIG: ${{ inputs.q1_transport_config }}
@@ -58,11 +65,31 @@ jobs:
         with:
           python-version: '3.12.3'
           architecture: arm64
-      - name: Validate manual scope and trusted bootstrap configuration
-        run: >-
-          python -B scripts/ci_v2_schema2_research.py plan
-          --key "$BASELINE_KEY"
-          --sys-revision "$SYS_REVISION" --sim-revision "$SIM_REVISION"
+      - name: Validate Parent selection and trusted build configuration
+        run: |
+          parent_args=()
+          case "$AUTO_PARENT" in
+            false)
+              if [[ -z "$BASELINE_KEY" ]]; then
+                printf '%s\n' 'Manual mode requires baseline_key.' >&2
+                exit 2
+              fi
+              parent_args=(--key "$BASELINE_KEY")
+              ;;
+            true)
+              if [[ -n "$BASELINE_KEY" ]]; then
+                printf '%s\n' 'Auto mode requires an empty baseline_key.' >&2
+                exit 2
+              fi
+              parent_args=(--auto-parent)
+              ;;
+            *)
+              printf '%s\n' 'auto_parent must be true or false.' >&2
+              exit 2
+              ;;
+          esac
+          python -B scripts/ci_v2_schema2_research.py plan "${parent_args[@]}" \
+          --sys-revision "$SYS_REVISION" --sim-revision "$SIM_REVISION" \
           --output "$RUNNER_TEMP/p5a"
       - name: Restore optional pinned Q1 diagnostic inputs
         if: env.Q1_TRANSPORT_CONFIG != ''

@@ -61,10 +61,10 @@ those results. Registration-only build support needs a separately reviewed
 transition-policy integration and remains blocked.
 
 Step 3B changes no Workflow, Registry entry, Policy, frozen fingerprint, benchmark
-or Runtime Lock. The existing Workflow still requires `baseline_key`; Step 3C
-must separately wire an explicit opt-in to this mode and perform authorized
-Hosted validation. Historical C2 archival does not make C2 eligible. Owner
-registration to an isolated Registry copy is not authoritative registration.
+or Runtime Lock. Step 3C locally wires the explicit Workflow opt-in described
+below; deployment and authorized Hosted validation are separate operations.
+Historical C2 archival does not make C2 eligible. Owner registration to an
+isolated Registry copy is not authoritative registration.
 `QUALITY_REVIEW_REQUIRED`, applicable Q1 restrictions, P8 blocking and production
 `NOT_AUTHORIZED` remain unchanged. Local offline tests are not Hosted acceptance.
 
@@ -92,3 +92,67 @@ All four changed/new Python files compile in memory. Frozen runtime verification
 confirms unchanged P2, P3, P4.1 and R2 fingerprints. Whitespace checks cover both
 tracked changes and new files. This verification does not qualify a downloaded
 Parent, grant Owner approval, or establish Hosted auto-selection acceptance.
+
+## Step 3C manual Workflow opt-in (locally tested, not Hosted-validated)
+
+The existing manual research Workflow adds boolean `auto_parent`, default false.
+`baseline_key` is optional in the dispatch schema, with an empty default; its
+conditional requirement is checked by the planning step before invoking Python.
+
+| auto_parent | baseline_key | Planning command |
+| --- | --- | --- |
+| false | Nonempty | `plan --key "$BASELINE_KEY"` |
+| false | Empty | Reject before planning |
+| true | Empty | `plan --auto-parent` |
+| true | Nonempty | Reject conflicting inputs before planning |
+
+The shell accepts only `true` or `false`, passes inputs through environment
+variables and uses a Bash argument array. It does not evaluate input as shell
+code, trim keys, duplicate the selector, create policies or change authorization.
+Key syntax and exact commit validation remain in the existing Python planner.
+Existing `execute-plan`, Q1 wiring, permissions, Runner, token scope, artifact
+upload/retention and optional Candidate archival remain unchanged.
+
+Both commands retain the same target and output arguments:
+
+```bash
+--sys-revision "$SYS_REVISION" --sim-revision "$SIM_REVISION" \
+--output "$RUNNER_TEMP/p5a"
+```
+
+The old commit defaults are intentionally preserved. For a separately authorized
+Hosted C1-to-C2 auto-selection test, explicitly supply:
+
+```text
+auto_parent: true
+baseline_key: empty
+sys_revision: 351368e108f47f8d15f89baac96683ecadaee32c
+sim_revision: bd1c2a46740b851c9c05423a30d5bb54ba550028
+q1_transport_config: empty
+archive_candidate: false
+```
+
+The existing SPHinXsim default is the older C1 revision `dceacd4e...`, which could
+match the existing P2-to-C1 authorization. It is not the C2 target above. This
+configuration is expected to select registered C1, not archived/unregistered C2.
+Before Hosted validation, review and commit these local changes, separately
+authorize deployment to the personal test repository and dispatch, confirm the
+actual deployed commit and existing C1 private asset access, then independently
+verify the resulting Plan selection pins, Parent identity, full execution gates
+and preserved research/production restrictions. This documentation authorizes
+none of those remote operations.
+
+`test_schema2_workflow.WorkflowParentModeTests` executes the actual planning
+shell in isolated temporary directories with an argv-recording Python stub.
+It checks both valid modes, missing/conflicting keys, invalid boolean values,
+exact revision/output propagation, shell-injection resistance, failure status
+propagation, Workflow permissions/token boundaries and shell/Python syntax.
+It neither runs the real build step nor contacts GitHub.
+
+The documented Step 3B regression command above, with
+`test_schema2_workflow.WorkflowParentModeTests` added to its module list, passed
+111 offline tests, including 11 new Workflow-mode tests. The changed Python test
+file compiles in memory; YAML parsing, every Workflow shell block and embedded
+Python syntax pass. Frozen runtime verification confirms unchanged P2/P3/P4.1/R2
+fingerprints. The only Step 3C changes are the Workflow, its test module and this
+document; no build, R2 execution, deployment, commit or push was performed.

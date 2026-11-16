@@ -105,6 +105,146 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertFalse(report['blocking'])
 
 
+class WorkflowParentModeTests(unittest.TestCase):
+    """Execute only the real planning shell with an argv-recording Python stub."""
+
+    def setUp(self):
+        import yaml
+        self.workflow = yaml.safe_load((P / '.github/workflows/ci_v2_manual_research.yml').read_text())
+        self.inputs = self.workflow.get('on', self.workflow.get(True))['workflow_dispatch']['inputs']
+        self.job = self.workflow['jobs']['candidate']
+        self.planner = next(s for s in self.job['steps']
+                            if 'ci_v2_schema2_research.py plan' in s.get('run', ''))['run']
+
+    def run_planning(self, *, auto=None, key='reviewed-parent', sys_revision='a'*40,
+                     sim_revision='b'*40, planner_exit=0):
+        with tempfile.TemporaryDirectory(prefix='step3c-workflow-') as tmp:
+            root = Path(tmp); binary = root / 'bin'; binary.mkdir()
+            capture = root / 'capture.py'; receipt = root / 'arguments.json'
+            capture.write_text('import json,os,sys\nfrom pathlib import Path\n'
+                'Path(os.environ["STEP3C_RECEIPT"]).write_text(json.dumps(sys.argv[1:]))\n'
+                'raise SystemExit(int(os.environ["STEP3C_EXIT"]))\n')
+            python = binary / 'python'
+            python.write_text('#!/bin/sh\nexec "$STEP3C_PYTHON" -B "$STEP3C_CAPTURE" "$@"\n')
+            python.chmod(0o755)
+            env = {**os.environ, 'PATH': str(binary) + os.pathsep + os.defpath,
+                   'STEP3C_PYTHON': sys.executable, 'STEP3C_CAPTURE': str(capture),
+                   'STEP3C_RECEIPT': str(receipt), 'STEP3C_EXIT': str(planner_exit),
+                   'PYTHONDONTWRITEBYTECODE': '1',
+                   'AUTO_PARENT': str(self.inputs['auto_parent']['default']).lower() if auto is None else auto,
+                   'BASELINE_KEY': key, 'SYS_REVISION': sys_revision, 'SIM_REVISION': sim_revision,
+                   'RUNNER_TEMP': str(root / 'runner temp')}
+            result = subprocess.run(['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail',
+                                     '-c', self.planner], cwd=root, env=env, capture_output=True, text=True)
+            arguments = json.loads(receipt.read_text()) if receipt.exists() else None
+            return result, arguments, env['RUNNER_TEMP'], (root/'shell-injection-marker').exists()
+
+    def test_dispatch_defaults_preserve_manual_mode_and_target_revisions(self):
+        self.assertEqual(self.inputs['auto_parent'], {
+            'description': 'Automatically select the uniquely authorized Trusted Parent',
+            'required': False, 'type': 'boolean', 'default': False})
+        self.assertIs(self.inputs['baseline_key']['required'], False)
+        self.assertEqual(self.inputs['baseline_key']['default'], '')
+        self.assertIs(self.inputs['archive_candidate']['default'], False)
+        self.assertEqual(self.inputs['sys_revision']['default'], '351368e108f47f8d15f89baac96683ecadaee32c')
+        self.assertEqual(self.inputs['sim_revision']['default'], 'dceacd4e509a8592b802cf44bb2885bea7ddfdb3')
+
+    def test_default_manual_shell_passes_the_exact_key_and_revisions(self):
+        result, args, temp, _ = self.run_planning()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(args, ['-B', 'scripts/ci_v2_schema2_research.py', 'plan', '--key', 'reviewed-parent',
+                               '--sys-revision', 'a'*40, '--sim-revision', 'b'*40, '--output', temp+'/p5a'])
+
+    def test_explicit_auto_shell_requires_no_key_and_preserves_target_arguments(self):
+        result, args, temp, _ = self.run_planning(auto='true', key='')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(args, ['-B', 'scripts/ci_v2_schema2_research.py', 'plan', '--auto-parent',
+                               '--sys-revision', 'a'*40, '--sim-revision', 'b'*40, '--output', temp+'/p5a'])
+        self.assertNotIn('--key', args)
+
+    def test_empty_manual_key_is_rejected_before_planning(self):
+        result, args, _, _ = self.run_planning(auto='false', key='')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('Manual mode requires baseline_key', result.stderr)
+        self.assertIsNone(args)
+
+    def test_auto_with_key_is_rejected_including_whitespace_not_silently_trimmed(self):
+        for key in ('reviewed-parent', ' '):
+            with self.subTest(key=key):
+                result, args, _, _ = self.run_planning(auto='true', key=key)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('Auto mode requires an empty baseline_key', result.stderr)
+                self.assertIsNone(args)
+
+    def test_invalid_boolean_strings_never_invoke_planner(self):
+        for value in ('', 'TRUE', '1', 'yes', '$(touch shell-injection-marker)'):
+            with self.subTest(value=value):
+                result, args, _, marker = self.run_planning(auto=value, key='')
+                self.assertEqual(result.returncode, 2)
+                self.assertIsNone(args)
+                self.assertFalse(marker)
+
+    def test_environment_values_are_arguments_not_executable_shell(self):
+        key = '$(touch shell-injection-marker)'
+        sys_revision = 'abc"; touch shell-injection-marker; #'
+        sim_revision = '`touch shell-injection-marker`'
+        result, args, _, marker = self.run_planning(key=key, sys_revision=sys_revision,
+                                                  sim_revision=sim_revision)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(args[args.index('--key')+1], key)
+        self.assertEqual(args[args.index('--sys-revision')+1], sys_revision)
+        self.assertEqual(args[args.index('--sim-revision')+1], sim_revision)
+        self.assertFalse(marker)
+        self.assertNotIn('${{ inputs.', self.planner)
+        self.assertNotIn('eval ', self.planner)
+
+    def test_existing_planner_failure_is_not_suppressed(self):
+        result, args, _, _ = self.run_planning(auto='true', key='', planner_exit=2)
+        self.assertEqual(result.returncode, 2)
+        self.assertIsNotNone(args)
+
+    def test_real_cli_rejects_unsafe_keys_and_targets_received_from_shell(self):
+        cases = [dict(key='$(touch shell-injection-marker)'),
+                 dict(auto='true', key='', sim_revision='main')]
+        for values in cases:
+            with self.subTest(values=values):
+                result, args, _, marker = self.run_planning(**values)
+                self.assertEqual(result.returncode, 0)  # argv recorder only
+                self.assertFalse(marker)
+                with tempfile.TemporaryDirectory(prefix='step3c-cli-') as tmp:
+                    argv = args[2:]  # Strip the recorded Python -B and script path.
+                    argv[argv.index('--output')+1] = str(Path(tmp)/'blocked-plan')
+                    with redirect_stdout(io.StringIO()) as out:
+                        self.assertEqual(cli.main(argv), 2)
+                    self.assertEqual(json.loads(out.getvalue())['status'], 'UNSAFE_INPUT')
+
+    def test_existing_execution_gate_and_token_boundaries_are_unchanged(self):
+        self.assertEqual(self.job['env']['AUTO_PARENT'], '${{ inputs.auto_parent }}')
+        self.assertEqual(self.job['env']['BASELINE_KEY'], '${{ inputs.baseline_key }}')
+        self.assertEqual(self.workflow['permissions'], {'contents': 'read'})
+        self.assertNotIn('permissions', self.job)
+        self.assertEqual(self.job['runs-on'], 'ubuntu-24.04-arm')
+        execution = next(s for s in self.job['steps'] if 'ci_v2_schema2_research.py execute-plan' in s.get('run', ''))
+        self.assertEqual(execution['env'], {'TRUSTED_RELEASE_TOKEN': '${{ secrets.GITHUB_TOKEN }}'})
+        self.assertIn('--plan "$RUNNER_TEMP/p5a/plan.json"', execution['run'])
+        self.assertNotIn('env', next(s for s in self.job['steps'] if s.get('run') == self.planner))
+        self.assertNotIn('secrets.', str(self.job['env']))
+        for forbidden in ('register', 'approve', 'publish', 'run_local', 'git push'):
+            self.assertNotIn(forbidden, self.planner)
+
+    def test_all_workflow_run_blocks_and_embedded_python_have_valid_syntax(self):
+        for job in self.workflow['jobs'].values():
+            for step in job.get('steps', []):
+                code = step.get('run')
+                if code is None:
+                    continue
+                result = subprocess.run(['bash', '-n'], input=code, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                if "<<'PY'\n" in code:
+                    python = code.split("<<'PY'\n", 1)[1].split('\nPY', 1)[0]
+                    compile(python, 'workflow embedded Python', 'exec')
+
+
 class ExecutePlanQ1Tests(unittest.TestCase):
     """Parameter wiring only; transport, Git and corpus work never execute."""
 
