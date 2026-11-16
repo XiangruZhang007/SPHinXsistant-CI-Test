@@ -2,6 +2,12 @@ name: Upstream Refresh Candidate
 
 on:
   workflow_dispatch:
+    inputs:
+      build_ci_v2:
+        description: Explicitly build the detected pair only if CI V2 preflight authorizes it
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "0 6 * * 1"
 
@@ -11,6 +17,10 @@ permissions:
 jobs:
   candidate-refresh:
     runs-on: ubuntu-latest
+    outputs:
+      execute_candidate: ${{ steps.ci_v2_route.outcome == 'success' && steps.ci_v2_route.outputs.execute_candidate || 'false' }}
+      transfer: ${{ steps.ci_v2_route.outputs.transfer }}
+      execution_key: ${{ steps.ci_v2_route.outputs.execution_key }}
 
     steps:
       - name: Check out SPHinXsistant
@@ -31,6 +41,35 @@ jobs:
           python scripts/check_upstream_updates.py
           --config configs/upstream_baseline.json
           > "${{ runner.temp }}/sphinxsistant_candidate/upstream_status.json"
+
+      - name: Preflight the detected pair without authorizing unattended builds
+        id: ci_v2_route
+        continue-on-error: true
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONHASHSEED: '0'
+          CI_V2_BUILD_REQUESTED: ${{ inputs.build_ci_v2 }}
+        run: |
+          mkdir "$RUNNER_TEMP/ci-v2-update"
+          adapter_exit=0
+          python -B scripts/prepare_ci_v2_update.py \
+            --detection "$RUNNER_TEMP/sphinxsistant_candidate/upstream_status.json" \
+            --output "$RUNNER_TEMP/ci-v2-update/preflight" || adapter_exit=$?
+          python -B scripts/route_ci_v2_update.py export \
+            --detection "$RUNNER_TEMP/sphinxsistant_candidate/upstream_status.json" \
+            --preflight "$RUNNER_TEMP/ci-v2-update/preflight" \
+            --adapter-exit "$adapter_exit" --output "$RUNNER_TEMP/ci-v2-update/routing.json"
+
+      - name: Preserve detection and CI V2 routing evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # verified v4
+        with:
+          name: ci-v2-update-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/sphinxsistant_candidate/upstream_status.json
+            ${{ runner.temp }}/ci-v2-update/
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Clone upstream source repositories
         run: |
@@ -75,3 +114,57 @@ jobs:
           name: sphinxsistant-candidate-refresh
           path: ${{ runner.temp }}/sphinxsistant_candidate
           if-no-files-found: error
+
+  candidate:
+    needs: candidate-refresh
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.build_ci_v2 && needs.candidate-refresh.outputs.execute_candidate == 'true' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    concurrency:
+      group: ci-v2-update-${{ github.repository_id }}-${{ needs.candidate-refresh.outputs.execution_key }}
+      cancel-in-progress: false
+    env:
+      PYTHONHASHSEED: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_CONFIG_NOSYSTEM: '1'
+      CI_V2_BUILD_REQUESTED: ${{ inputs.build_ci_v2 }}
+      CI_V2_TRANSFER: ${{ needs.candidate-refresh.outputs.transfer }}
+    steps:
+      - name: Check out the exact workflow commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # verified v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Select exact frozen interpreter
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # verified v5
+        with:
+          python-version: '3.12.3'
+          architecture: arm64
+      - name: Revalidate transferred evidence and restore the original Plan
+        run: python -B scripts/route_ci_v2_update.py restore --output "$RUNNER_TEMP/p5a"
+      - name: Prepare pinned extraction runtime
+        run: |
+          git -c credential.helper= clone --no-checkout https://github.com/Consiliency/treesitter-chunker.git tools/treesitter-chunker
+          git -C tools/treesitter-chunker checkout --detach fb70922076c773d1865176329a03f67ff893fd90
+          python -m venv tools/treesitter-chunker/.venv
+          tools/treesitter-chunker/.venv/bin/python -m pip install -r configs/ci_v2_parser_requirements.txt
+          tools/treesitter-chunker/.venv/bin/python -m pip install -c configs/ci_v2_parser_requirements.txt -e tools/treesitter-chunker
+      - name: Restore, build and evaluate research candidate
+        env:
+          TRUSTED_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tools/treesitter-chunker/.venv/bin/python -B scripts/ci_v2_schema2_research.py execute-plan \
+            --plan "$RUNNER_TEMP/p5a/plan.json" \
+            --work "$RUNNER_TEMP/p5a-work" --output "$RUNNER_TEMP/p5a/run"
+      - name: Upload candidate evidence or explicit failure report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # verified v4
+        with:
+          name: ci-v2-research-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p5a/plan.json
+            ${{ runner.temp }}/p5a/run
+            ${{ runner.temp }}/p5a/candidate.tar.gz
+          if-no-files-found: error
+          retention-days: 30
