@@ -374,11 +374,12 @@ class GitHubReleasePublisher:
             raise ArchiveError('GitHub API returned invalid JSON') from None
 
     def _upload(self, upload_url, release_id, path):
-        parsed = urllib.parse.urlsplit(upload_url)
         expected_prefix = f'/repos/{self.repository}/releases/{release_id}/assets'
-        _need(parsed.scheme == 'https' and parsed.hostname == UPLOAD_HOST and parsed.port in (None, 443)
-              and parsed.path.startswith(expected_prefix) and not parsed.username and not parsed.password
-              and not parsed.query and not parsed.fragment,
+        bases = (f'https://{UPLOAD_HOST}{expected_prefix}',
+                 f'https://{UPLOAD_HOST}:443{expected_prefix}')
+        # GitHub returns a URI template; accept only its exact known suffix.
+        _need(isinstance(upload_url, str)
+              and any(upload_url in (base, base + '{?name,label}') for base in bases),
               'GitHub returned an unsafe Release upload URL')
         name = Path(path).name
         target = expected_prefix + '?name=' + urllib.parse.quote(name, safe='')

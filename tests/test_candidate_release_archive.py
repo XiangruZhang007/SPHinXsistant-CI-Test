@@ -417,5 +417,112 @@ class CandidateArchiveTests(unittest.TestCase):
         self.assertIn('scripts/archive_candidate_release.py', text)
 
 
+class ReleaseUploadUrlTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.asset = Path(directory.name) / 'candidate.tar.gz'
+        self.asset.write_bytes(b'synthetic-upload-asset\n')
+        self.publisher = archive.GitHubReleasePublisher('synthetic-upload-token')
+        self.release_id = 99
+        self.endpoint = f'/repos/{archive.REPOSITORY}/releases/{self.release_id}/assets'
+        self.base_url = 'https://uploads.github.com' + self.endpoint
+
+    def assert_upload(self, url, *, publisher=None, asset=None, target=None):
+        publisher = self.publisher if publisher is None else publisher
+        asset = self.asset if asset is None else asset
+        metadata = {'id': 123, 'name': asset.name, 'size': asset.stat().st_size,
+                    'state': 'uploaded', 'digest': 'sha256:' + file_digest(asset)}
+        with patch.object(archive.http.client, 'HTTPSConnection', autospec=True) as connect:
+            connection = connect.return_value
+            response = connection.getresponse.return_value
+            response.status = 201
+            response.read.return_value = json.dumps(metadata).encode()
+            # Exercise the actual uploader, including its URL validation.
+            result = publisher._upload(url, self.release_id, asset)
+            self.assertEqual(result, metadata)
+            connect.assert_called_once_with('uploads.github.com', timeout=300)
+            connection.putrequest.assert_called_once_with(
+                'POST', target or self.endpoint + '?name=candidate.tar.gz')
+            connection.putheader.assert_any_call('Content-Length', str(asset.stat().st_size))
+            connection.putheader.assert_any_call('Content-Type', 'application/gzip')
+            connection.send.assert_called_once_with(asset.read_bytes())
+            connection.close.assert_called_once_with()
+        self.assertEqual(publisher._verify_asset(self.release_id, result, asset)['sha256'],
+                         file_digest(asset))
+
+    def assert_rejected(self, urls):
+        for url in urls:
+            with self.subTest(url=url):
+                with patch.object(archive.http.client, 'HTTPSConnection', autospec=True) as connect:
+                    with self.assertRaisesRegex(archive.ArchiveError, 'unsafe Release upload URL') as error:
+                        self.publisher._upload(url, self.release_id, self.asset)
+                    connect.assert_not_called()
+                    self.assertNotIn(self.publisher.token, str(error.exception))
+
+    def test_real_github_uri_template_is_accepted(self):
+        self.assert_upload(self.base_url + '{?name,label}')
+
+    def test_bare_url_and_explicit_https_port_remain_compatible(self):
+        for authority in ('uploads.github.com', 'uploads.github.com:443'):
+            for suffix in ('', '{?name,label}'):
+                with self.subTest(authority=authority, suffix=suffix):
+                    self.assert_upload('https://' + authority + self.endpoint + suffix)
+
+    def test_filename_is_percent_encoded_in_constructed_request(self):
+        asset = self.asset.with_name('candidate +\u00e9?#.tar.gz')
+        asset.write_bytes(self.asset.read_bytes())
+        self.assert_upload(self.base_url + '{?name,label}', asset=asset,
+                           target=self.endpoint + '?name=candidate%20%2B%C3%A9%3F%23.tar.gz')
+
+    def test_historical_adapter_uses_real_uploader_with_template(self):
+        from src.historical_candidate_archive import _Publisher
+        self.assertIs(_Publisher._upload, archive.GitHubReleasePublisher._upload)
+        publisher = _Publisher('synthetic-upload-token', archive.REPOSITORY)
+        self.assert_upload(self.base_url + '{?name,label}', publisher=publisher)
+
+    def test_unexpected_template_forms_are_rejected(self):
+        self.assert_rejected([self.base_url + suffix for suffix in (
+            '{?name}', '{?label,name}', '{?name,label,extra}', '{name,label}',
+            '{?name,label}{?name,label}', '{?name,label}/extra', '{?name,label',
+            '%7B?name,label%7D', '{}')])
+
+    def test_queries_and_fragments_are_rejected(self):
+        self.assert_rejected([self.base_url + suffix for suffix in (
+            '?name=unexpected', '?', '#fragment', '#', '?x=1{?name,label}',
+            '{?name,label}?x=1', '{?name,label}#fragment')])
+
+    def test_wrong_hosts_schemes_and_ports_are_rejected(self):
+        self.assert_rejected([
+            'http://uploads.github.com' + self.endpoint,
+            'https://api.github.com' + self.endpoint,
+            'https://uploads.github.com.example.com' + self.endpoint,
+            'https://uploads.github.com:444' + self.endpoint,
+            'https://uploads.github.com:invalid' + self.endpoint,
+            '//uploads.github.com' + self.endpoint,
+            self.base_url + '\n', '\t' + self.base_url,
+        ])
+
+    def test_embedded_credentials_are_rejected(self):
+        self.assert_rejected([
+            'https://user:password@uploads.github.com' + self.endpoint,
+            'https://@uploads.github.com' + self.endpoint,
+            'https://uploads.github.com@other.example' + self.endpoint,
+        ])
+
+    def test_wrong_repository_release_and_path_suffixes_are_rejected(self):
+        self.assert_rejected([
+            self.base_url.replace('/releases/99/', '/releases/999/'),
+            self.base_url.replace(archive.REPOSITORY, 'other-owner/other-repository'),
+            self.base_url + '/extra', self.base_url + '-suffix',
+            self.base_url + '/../assets', self.base_url + '%2fextra',
+            self.base_url + '/extra{?name,label}',
+            self.base_url.replace('/assets', '/assets-extra') + '{?name,label}',
+        ])
+
+    def test_non_string_urls_are_rejected_before_connection(self):
+        self.assert_rejected([None, 123, self.base_url.encode()])
+
+
 if __name__ == '__main__':
     unittest.main()
