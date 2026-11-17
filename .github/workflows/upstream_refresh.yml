@@ -213,11 +213,18 @@ jobs:
           run-id: ${{ github.run_id }}
           path: ${{ runner.temp }}/continuous-detection
           digest-mismatch: error
+      - name: Prepare pinned extraction runtime
+        run: |
+          git -c credential.helper= clone --no-checkout https://github.com/Consiliency/treesitter-chunker.git tools/treesitter-chunker
+          git -C tools/treesitter-chunker checkout --detach fb70922076c773d1865176329a03f67ff893fd90
+          python -m venv tools/treesitter-chunker/.venv
+          tools/treesitter-chunker/.venv/bin/python -m pip install -r configs/ci_v2_parser_requirements.txt
+          tools/treesitter-chunker/.venv/bin/python -m pip install -c configs/ci_v2_parser_requirements.txt -e tools/treesitter-chunker
       - name: Verify scheduled context and record blockers without constructing
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python -B scripts/run_continuous_ci_v2.py --preflight-only \
+          tools/treesitter-chunker/.venv/bin/python -B scripts/run_continuous_ci_v2.py --preflight-only \
             --detection "$RUNNER_TEMP/continuous-detection/sphinxsistant_candidate/upstream_status.json" \
             --work "$RUNNER_TEMP/continuous-work" --output "$RUNNER_TEMP/continuous-result"
       - name: Preserve scheduled preflight or explicit failure evidence

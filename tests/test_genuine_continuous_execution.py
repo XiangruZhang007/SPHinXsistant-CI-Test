@@ -566,10 +566,15 @@ class GenuineFormatTests(unittest.TestCase):
         self.assertEqual(job['permissions'], {'contents': 'read', 'actions': 'read'})
         self.assertEqual(job['runs-on'], 'ubuntu-24.04-arm')
         steps = [step for step in job['steps'] if 'run' in step]
-        self.assertEqual(len(steps), 1)
-        shell = steps[0]['run']; self.assertIn('--preflight-only', shell); self.assertNotIn('${{', shell)
-        self.assertNotIn('TRUSTED_RELEASE_TOKEN', steps[0]['env'])
-        self.assertNotIn('continue-on-error', steps[0])
+        self.assertEqual(len(steps), 2)
+        runtime, preflight = steps
+        build_runtime = next(step['run'] for step in workflow['jobs']['continuous-candidate']['steps']
+                             if step.get('name') == 'Prepare pinned extraction runtime')
+        self.assertEqual(runtime['run'], build_runtime)
+        shell = preflight['run']; self.assertIn('--preflight-only', shell); self.assertNotIn('${{', shell)
+        self.assertTrue(shell.startswith('tools/treesitter-chunker/.venv/bin/python -B '))
+        self.assertNotIn('TRUSTED_RELEASE_TOKEN', preflight['env'])
+        self.assertNotIn('continue-on-error', preflight)
         for step in job['steps']:
             if 'uses' in step: self.assertRegex(step['uses'], '@[0-9a-f]{40}$')
         bin_dir = self.root / 'bin'; bin_dir.mkdir()

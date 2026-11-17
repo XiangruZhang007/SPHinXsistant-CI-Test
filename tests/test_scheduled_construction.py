@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import unittest
 import zipfile
 from unittest.mock import patch
@@ -399,6 +400,68 @@ class ScheduledTests(unittest.TestCase):
               patch.object(historical, '_download', side_effect=unsafe_download), self.assertRaises(ValueError)):
             store.retrieve_build(self.client, self.fx.config, 401, 1, self.root / 'unsafe')
         self.assertFalse((self.root / 'escape').exists())
+
+
+class PreflightRuntimeTests(unittest.TestCase):
+    """Offline runtime probes, not a clean Hosted runner acceptance claim."""
+
+    def job(self):
+        return yaml.safe_load((P / '.github/workflows/upstream_refresh.yml').read_text())['jobs']['continuous-schedule-preflight']
+
+    def test_prepared_interpreter_imports_real_entry_without_inherited_pythonpath(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith('PYTHON')}
+        env.update(PYTHONDONTWRITEBYTECODE='1', PYTHONHASHSEED='0')
+        result = subprocess.run([str(P / 'tools/treesitter-chunker/.venv/bin/python'), '-B',
+                                 'scripts/run_continuous_ci_v2.py', '--help'], cwd=P, env=env,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--preflight-only', result.stdout)
+
+    def test_real_workflow_shell_records_missing_authority_without_work_or_secrets(self):
+        shell = next(step['run'] for step in self.job()['steps']
+                     if 'scripts/run_continuous_ci_v2.py' in step.get('run', ''))
+        with tempfile.TemporaryDirectory(prefix='preflight runtime ') as tmp:
+            env = {**os.environ, 'RUNNER_TEMP': tmp, 'PYTHONPATH': '',
+                   'CONTINUOUS_BUILD_DEPLOYMENT_JSON': '', 'CONTINUOUS_BUILD_DEPLOYMENT_SHA256': '',
+                   'GH_TOKEN': 'offline-secret-must-not-appear'}
+            result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', shell], cwd=P,
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            receipt = read_json(Path(tmp) / 'continuous-result/failure.json')
+            self.assertEqual(receipt['reason'], 'CONTINUOUS_DEPLOYMENT_NOT_CONFIGURED')
+            self.assertEqual(json.loads(result.stdout), receipt)
+            self.assertFalse(receipt['execute_candidate'])
+            self.assertFalse((Path(tmp) / 'continuous-work').exists())
+            self.assertNotIn(env['GH_TOKEN'], result.stdout + result.stderr + json.dumps(receipt))
+
+    def test_runtime_setup_failure_stops_before_entry_and_does_not_report_success(self):
+        job = self.job()
+        runtime = next(step for step in job['steps'] if step.get('name') == 'Prepare pinned extraction runtime')
+        self.assertNotIn('continue-on-error', runtime)
+        with tempfile.TemporaryDirectory(prefix='preflight-setup-failure-') as tmp:
+            root = Path(tmp); stub = root / 'git'
+            stub.write_text('#!/bin/sh\nexit 37\n'); stub.chmod(0o755)
+            marker = root / 'unexpected-entry'
+            result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c',
+                                     runtime['run'] + '\nprintf unexpected > "$ENTRY_MARKER"\n'],
+                                    cwd=root, env={**os.environ, 'PATH': str(root) + os.pathsep + os.defpath,
+                                                   'ENTRY_MARKER': str(marker)}, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 37)
+            self.assertFalse(marker.exists())
+            self.assertFalse((root / 'continuous-result').exists())
+
+    def test_only_preflight_job_changed_and_frozen_runtime_selection_is_preserved(self):
+        current = yaml.safe_load((P / '.github/workflows/upstream_refresh.yml').read_text())
+        original = yaml.safe_load(subprocess.check_output(
+            ['git', 'show', '092d4f8aa6cfec53bcbbb669b66f197327352062:.github/workflows/upstream_refresh.yml'],
+            cwd=P, text=True))
+        job = current['jobs'].pop('continuous-schedule-preflight')
+        original['jobs'].pop('continuous-schedule-preflight')
+        self.assertEqual(current, original)
+        self.assertEqual(job['permissions'], {'contents': 'read', 'actions': 'read'})
+        self.assertEqual(job['runs-on'], 'ubuntu-24.04-arm')
+        setup = next(step for step in job['steps'] if step.get('name') == 'Select exact frozen interpreter')
+        self.assertEqual(setup['with'], {'python-version': '3.12.3', 'architecture': 'arm64'})
 
 
 if __name__ == '__main__': unittest.main()
