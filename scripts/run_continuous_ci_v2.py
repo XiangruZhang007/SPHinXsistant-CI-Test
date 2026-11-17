@@ -2,6 +2,7 @@
 """Reviewed Hosted continuous entry; missing independent configuration blocks."""
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -18,13 +19,22 @@ def main(argv=None):
     parser.add_argument('--detection', type=Path, required=True)
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--preflight-only', action='store_true', help='Read-only context/Parent comparison; never constructs a Candidate')
     args = parser.parse_args(argv)
     output = None
     try:
         output = output_directory(P, args.output)
-        result = run.execute(P, args.detection, args.work, output)
+        if args.preflight_only:
+            result = run.preflight(P, args.detection)
+            output.mkdir(exist_ok=False)
+            write_json(output / 'preflight.json', result)
+        else:
+            result = run.execute(P, args.detection, args.work, output)
+        if os.environ.get('GITHUB_OUTPUT') and not args.preflight_only:
+            with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as stream:
+                stream.write('candidate_built=' + ('true' if result['status'] == 'GENUINE_CONTINUOUS_CANDIDATE_BUILT' else 'false') + '\n')
         print(json.dumps(result, sort_keys=True, allow_nan=False))
-        return 0
+        return 1 if result['status'] == 'BLOCKED' else 0
     except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError,
             subprocess.SubprocessError):
         # Do not print exception bodies, clone URLs, credentials or API responses.

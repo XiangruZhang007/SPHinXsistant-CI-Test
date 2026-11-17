@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -320,13 +321,142 @@ class GenuineFormatTests(unittest.TestCase):
 
     def test_no_update_never_constructs(self):
         report = deepcopy(self.report)
-        for row in report.values(): row.update(baseline_commit=row['latest_commit'], update_available=False)
+        for repo, row in report.items():
+            row.update(latest_commit=self.ref['upstreams'][repo], update_available=False)
         path = self.root / 'no-update.json'; write(path, report)
         with self.boundaries(), patch.object(trust, 'download', side_effect=AssertionError('Unexpected transport')):
             self.assertEqual(run.execute(self.project, path, self.root / 'work', self.root / 'out')['status'], 'NO_UPDATE')
         self.assertFalse((self.root / 'work').exists())
         self.assertEqual(read_json(self.root / 'out/no-update.json')['status'], 'NO_UPDATE')
         self.assertEqual({p.name for p in (self.root / 'out').iterdir()}, {'no-update.json'})
+
+    def test_static_detector_no_update_does_not_hide_real_parent_update(self):
+        report = deepcopy(self.report)
+        for row in report.values(): row.update(baseline_commit=row['latest_commit'], update_available=False)
+        path = self.root / 'static-no-update.json'; write(path, report)
+        original_bytes = path.read_bytes()
+        with self.boundaries():
+            result = run.execute(self.project, path, self.root / 'work', self.root / 'out')
+        self.assertEqual(result['status'], 'GENUINE_CONTINUOUS_CANDIDATE_BUILT')
+        self.assertEqual(result['upstreams'], self.factory.revisions)
+        observation = read_json(self.root / 'out/run/evidence/authorization-context.json')['parent_comparison']
+        self.assertFalse(observation['detector_update_reported']); self.assertTrue(observation['update_available'])
+        self.assertEqual(path.read_bytes(), original_bytes)
+
+    def test_static_detector_update_does_not_rebuild_identical_parent(self):
+        report = deepcopy(self.report)
+        for repo, row in report.items():
+            row.update(baseline_commit='0' * 40, latest_commit=self.ref['upstreams'][repo], update_available=True)
+        path = self.root / 'static-update.json'; write(path, report)
+        with self.boundaries(), patch.object(trust, 'download', side_effect=AssertionError('Unexpected download')):
+            result = run.execute(self.project, path, self.root / 'work', self.root / 'out')
+        self.assertEqual(result['status'], 'NO_UPDATE')
+        self.assertTrue(result['authority_observation']['parent_comparison']['detector_update_reported'])
+        self.assertFalse(result['authority_observation']['parent_comparison']['update_available'])
+
+    def test_execution_key_is_stable_across_runs_and_detector_baseline_changes(self):
+        altered = deepcopy(self.report)
+        for row in altered.values(): row.update(baseline_commit='0' * 40, update_available=True)
+        path = self.root / 'baseline-changed.json'; write(path, altered)
+        with self.boundaries():
+            config, _, pin = run.deployment()
+            first = run._authority(self.project, self.detection_path, config, pin)
+            other = run._authority(self.project, path, config, pin)
+        self.assertNotEqual(first['detection_sha256'], other['detection_sha256'])
+        self.assertEqual(first['parent_comparison']['execution_key'], other['parent_comparison']['execution_key'])
+        later = deepcopy(self.api['repos/' + self.repo + '/actions/runs/401']); later['id'] = 402
+        self.api['repos/' + self.repo + '/actions/runs/402'] = later
+        with self.boundaries(), patch.dict(os.environ, {'GITHUB_RUN_ID': '402'}):
+            again = run._authority(self.project, self.detection_path, config, pin)
+        self.assertNotEqual(digest(first), digest(again))
+        self.assertEqual(first['parent_comparison']['execution_key'], again['parent_comparison']['execution_key'])
+        observed = run.detection(self.detection_path)
+        entry = read_json(self.registry)['baselines']['fixture-parent']
+        for field in ('continuous_policy_sha256', 'registry_sha256', 'execution_contract_sha256'):
+            different = run._comparison(observed, 'fixture-parent', entry, {**config, field: '0' * 64})
+            self.assertNotEqual(first['parent_comparison']['execution_key'], different['execution_key'])
+
+    def schedule_boundaries(self):
+        stack = ExitStack()
+        config = {**self.config, 'schema_version': 2, 'build_events': ['workflow_dispatch', 'schedule']}
+        stack.enter_context(patch.object(type(self), 'config', config))
+        stack.enter_context(patch.dict(self.api['repos/' + self.repo + '/actions/runs/401'], {'event': 'schedule'}))
+        stack.enter_context(self.boundaries())
+        stack.enter_context(patch.dict(os.environ, {'GITHUB_EVENT_NAME': 'schedule'}))
+        return stack
+
+    def test_scheduled_preflight_verifies_actual_identity_but_cannot_build(self):
+        with (self.schedule_boundaries(),
+              patch.object(owner, '_github_identity', side_effect=AssertionError('Registration verifier reused')),
+              patch.object(trust, 'download', side_effect=AssertionError('Unexpected transport')),
+              patch.object(v1, '_assemble', side_effect=AssertionError('Unexpected build'))):
+            result = run.preflight(self.project, self.detection_path)
+            self.assertEqual(result['status'], 'BLOCKED'); self.assertFalse(result['execute_candidate'])
+            self.assertEqual(result['blockers'], ['SCHEDULED_SCOPE_AUTHORIZATION_NOT_IMPLEMENTED',
+                                                 'DURABLE_REPEAT_EXECUTION_PROTECTION_NOT_ESTABLISHED'])
+            self.assertEqual(result['authority_observation']['workflow_run']['event'], 'schedule')
+            self.assertEqual(result['authority_observation']['authority'], 'PREAUTHORIZED_SCHEDULE_CONTEXT_ONLY')
+            self.assertEqual(result['authority_observation']['research_approval'], 'NOT_GRANTED')
+            self.assertFalse(result['scheduled_execution'])
+            with self.assertRaisesRegex(ValueError, 'SCHEDULED_CONSTRUCTION_NOT_AUTHORIZED'):
+                run.execute(self.project, self.detection_path, self.root / 'work', self.root / 'out')
+        self.assertFalse((self.root / 'work').exists()); self.assertFalse((self.root / 'out').exists())
+
+    def test_schedule_is_not_inferred_from_owner_policy_or_environment(self):
+        with self.boundaries(), patch.dict(os.environ, {'GITHUB_EVENT_NAME': 'schedule'}):
+            with self.assertRaisesRegex(ValueError, 'BUILD_EVENT_NOT_PREAUTHORIZED'):
+                run.preflight(self.project, self.detection_path)
+        with self.schedule_boundaries():
+            self.api['repos/' + self.repo + '/actions/runs/401']['event'] = 'workflow_dispatch'
+            with self.assertRaisesRegex(ValueError, 'GITHUB_WORKFLOW_RUN_BINDING_MISMATCH'):
+                run.preflight(self.project, self.detection_path)
+
+    def test_schedule_rejects_wrong_run_actor_repository_workflow_commit_and_attempt(self):
+        endpoint = 'repos/' + self.repo + '/actions/runs/401'
+        cases = [('run_attempt', 2), ('status', 'completed'), ('head_sha', '0' * 40), ('head_branch', 'other'),
+                 ('repository', {'id': 999, 'full_name': self.repo}),
+                 ('actor', {'id': 999, 'type': 'User'}), ('triggering_actor', {'id': 999, 'type': 'User'})]
+        for field, value in cases:
+            with self.subTest(field=field), self.schedule_boundaries(), patch.dict(self.api[endpoint], {field: value}):
+                with self.assertRaises(ValueError): run.preflight(self.project, self.detection_path)
+        with self.schedule_boundaries(), patch.dict(self.api['repos/' + self.repo + '/actions/workflows/501'], {'path': 'other.yml'}):
+            with self.assertRaisesRegex(ValueError, 'GITHUB_WORKFLOW_PATH_MISMATCH'):
+                run.preflight(self.project, self.detection_path)
+
+    def test_scheduler_actor_is_observation_not_human_reviewer(self):
+        endpoint = 'repos/' + self.repo + '/actions/runs/401'
+        with (self.schedule_boundaries(), patch.dict(os.environ, {'GITHUB_ACTOR_ID': '999'}),
+              patch.dict(self.api[endpoint], {'actor': {'id': 999, 'type': 'User'},
+                                            'triggering_actor': {'id': 999, 'type': 'User'}})):
+            result = run.preflight(self.project, self.detection_path)
+        self.assertEqual(result['status'], 'BLOCKED')
+        self.assertEqual(result['authority_observation']['workflow_run']['actor_id'], 999)
+        self.assertEqual(result['authority_observation']['research_approval'], 'NOT_GRANTED')
+
+    def test_schedule_no_update_receipt_and_cli_cannot_construct_or_replay(self):
+        report = deepcopy(self.report)
+        for repo, row in report.items(): row.update(latest_commit=self.ref['upstreams'][repo], update_available=False)
+        path = self.root / 'detected.json'; write(path, report)
+        for label, detected, expected in [('no-update', path, 0), ('update', self.detection_path, 1)]:
+            stdout = io.StringIO(); output = self.root / label
+            with (self.schedule_boundaries(), patch.object(cli, 'P', self.project), redirect_stdout(stdout),
+                  patch.object(run, 'execute', side_effect=AssertionError('Unexpected execution')),
+                  patch.object(ev, 'replay', side_effect=AssertionError('Unexpected replay')),
+                  patch.object(trust, 'download', side_effect=AssertionError('Unexpected download'))):
+                code = cli.main(['--preflight-only', '--detection', str(detected), '--work', str(self.root / 'work'),
+                                 '--output', str(output)])
+            self.assertEqual(code, expected)
+            result = json.loads(stdout.getvalue()); self.assertFalse(result['execute_candidate'])
+            self.assertEqual(read_json(output / 'preflight.json'), result)
+        self.assertFalse((self.root / 'work').exists())
+
+    def test_deployment_events_are_versioned_and_strict(self):
+        self.assertEqual(run._shape(self.config), self.config)
+        for value in ([], ['schedule'], ['push'], ['workflow_dispatch', 'schedule', 'schedule'], 'schedule'):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'INVALID_BUILD_EVENTS'):
+                run._shape({**self.config, 'schema_version': 2, 'build_events': value})
+        with self.assertRaisesRegex(ValueError, 'INVALID_CONTINUOUS_DEPLOYMENT'):
+            run._shape({**self.config, 'build_events': ['schedule']})
 
     def test_changed_source_during_construction_cannot_emit_candidate(self):
         actual = v1._assemble
@@ -427,6 +557,34 @@ class GenuineFormatTests(unittest.TestCase):
             if 'uses' in step: self.assertRegex(step['uses'], '@[0-9a-f]{40}$')
             if 'run' in step:
                 self.assertEqual(subprocess.run(['bash', '-n'], input=step['run'], text=True, capture_output=True).returncode, 0)
+
+    def test_scheduled_workflow_only_executes_read_only_preflight_shell(self):
+        workflow = yaml.safe_load((P / '.github/workflows/upstream_refresh.yml').read_text())
+        job = workflow['jobs']['continuous-schedule-preflight']
+        self.assertIn("github.event_name == 'schedule'", job['if'])
+        self.assertIn("github.event_name == 'workflow_dispatch'", workflow['jobs']['continuous-candidate']['if'])
+        self.assertEqual(job['permissions'], {'contents': 'read', 'actions': 'read'})
+        self.assertEqual(job['runs-on'], 'ubuntu-24.04-arm')
+        steps = [step for step in job['steps'] if 'run' in step]
+        self.assertEqual(len(steps), 1)
+        shell = steps[0]['run']; self.assertIn('--preflight-only', shell); self.assertNotIn('${{', shell)
+        self.assertNotIn('TRUSTED_RELEASE_TOKEN', steps[0]['env'])
+        self.assertNotIn('continue-on-error', steps[0])
+        for step in job['steps']:
+            if 'uses' in step: self.assertRegex(step['uses'], '@[0-9a-f]{40}$')
+        bin_dir = self.root / 'bin'; bin_dir.mkdir()
+        shim = bin_dir / 'python'; shim.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' "$@"\n'); shim.chmod(0o755)
+        runner = self.root / 'runner with spaces'; runner.mkdir()
+        marker = self.root / 'unexpected-execution'
+        env = {**os.environ, 'PATH': str(bin_dir) + os.pathsep + os.defpath, 'RUNNER_TEMP': str(runner),
+               'CONTINUOUS_BUILD_DEPLOYMENT_JSON': '', 'CONTINUOUS_BUILD_DEPLOYMENT_SHA256': '',
+               'GITHUB_EVENT_NAME': 'schedule', 'UNUSED': '$(touch ' + str(marker) + ')'}
+        completed = subprocess.run(['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', shell],
+                                   cwd=P, env=env, capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 1); self.assertFalse(marker.exists())
+        receipt = read_json(runner / 'continuous-result/failure.json')
+        self.assertEqual(receipt['reason'], 'CONTINUOUS_DEPLOYMENT_NOT_CONFIGURED')
+        self.assertFalse(receipt['execute_candidate']); self.assertFalse((runner / 'continuous-work').exists())
 
 
 if __name__ == '__main__': unittest.main()

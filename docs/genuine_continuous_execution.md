@@ -1,5 +1,10 @@
 # Genuine-format Continuous Execution integration
 
+Current scheduled implementation and its remaining trust/activation limits are
+documented in [scheduled_construction.md](scheduled_construction.md). The Part B
+sections below retain the earlier offline checkpoint record; their scheduled
+construction blocker descriptions are superseded by that versioned adapter.
+
 This connects independently configured continuous scope to the existing update
 Workflow, without generating exact-target approval policies. The default is
 **blocked**: no operational deployment or authority policy is installed here.
@@ -29,7 +34,7 @@ algorithm, approval system or Registry.
 Historical schema-2, Controlled V1 and controlled lifecycle files stay unchanged.
 Their fingerprints/pins are never recomputed to conceal compatibility changes.
 The old V1 entry still unconditionally blocks. The new format is
-`genuine-continuous-candidate-v1`, with a distinct evaluator projection. It
+`genuine-continuous-candidate-v2`, with a distinct evaluator projection. It
 rejects controlled Parents and controlled Candidates; existing verifiers still
 reject the new format. No format conversion or relabelling is performed.
 
@@ -129,6 +134,15 @@ exact-target builder with a generated policy. The read-only scope assessment's
 historical execution blocker is preserved as evidence; this new version's
 separately checked workflow build context is recorded independently.
 
+V2 determines `NO_UPDATE` by comparing the exact detected pair with the selected
+trusted Parent's upstream pair. It preserves the original V1 detector bytes,
+static-baseline flag and SHA-256; it does not change `upstream_baseline.json` or
+V1 behavior. The authority receipt contains this separate `parent_comparison`,
+including the Parent reference and Registry/scope/code pins. A false V1 update
+flag cannot hide a real update relative to that Parent, and a true V1 flag cannot
+rebuild an identical Parent. Equality is a metadata-only no-update decision,
+not fresh source authenticity, ancestry or Parent package qualification.
+
 The sealed output contains the new Candidate identity/projection, restored
 Parent, full snapshot, original detector/policy/Registry/reference/deployment
 bytes, source proof/branch observations, workflow identity receipt, raw R2 and
@@ -182,10 +196,14 @@ or an explicit failure receipt. This is evidence handoff, not permanent Release
 publication or web approval. Existing schema-2 Release archivers and genuine
 P4.1/registration workflows are **not claimed compatible** with this new format.
 
-Scheduled V2 remains disabled in both job routing and restrictions. Concurrency
-serializes continuous jobs but does not deduplicate across runs. There is no
-exactly-once guarantee; a new explicit authorized manual dispatch may repeat a
-pair. Repeat attempts are rejected, and schedules cannot start the job.
+Scheduled **construction** remains disabled in both job routing and restrictions.
+The separate `continuous-schedule-preflight` job can inspect the exact detector
+artifact on schedules, but invokes only `--preflight-only`. It has no builder,
+Release publisher or Registry writer. Its missing-configuration or eligible-update
+`BLOCKED` receipt fails the job explicitly; a green workflow is not acceptance.
+Concurrency serializes manual continuous jobs but does not deduplicate across
+runs. There is no exactly-once guarantee; an explicitly authorized new manual
+run may repeat a pair. Repeat attempts are rejected.
 
 ## Offline tests and remaining real validation
 
@@ -224,8 +242,10 @@ temporary commits, mock Releases or fixture decisions establishes official
 source publication or real Owner approval.
 
 The observed new implementation digest is
-`dedde1d81aa47c8f6c53f4f081fbd3e7b4a60d6c4f1d18e339d458ff3f8d616e`.
-It is not an authorized deployment pin. Controlled V1 remains
+`dedde1d81aa47c8f6c53f4f081fbd3e7b4a60d6c4f1d18e339d458ff3f8d616e`
+at the Part A checkpoint `15be431d09a655bc5960f64256b1d3fd9a4e3121`.
+That checkpoint independently reran 280 tests successfully. This is the V1
+implementation pin, not the current V2 pin or an authorized deployment pin. Controlled V1 remains
 `2d9c41cc55d5f6c7dd8022280e38b7d1ec8ad5d991d7e452396dfa02e19220e3`;
 controlled lifecycle remains
 `cf1e270eb655805934dace62e3934041db57202bdfb05d6d5d5a2dd2574ec7a3`.
@@ -233,3 +253,129 @@ The historical C1 orchestration still exactly matches its archived contract:
 `b0b43411aef4d716a15a2f0a794071523fbb3c260dc4cb3fc9b2736eed9e1ac1`.
 Frozen P2/P3/P4.1/R2 runtime/implementation checks and Registry-byte checks pass
 unchanged. No genuine C1/C2 reconstruction or replay was executed.
+
+
+## Automatic detection integration (Part B)
+
+Deployment schema 1 remains manual-only. Schema 2 extends that same closed
+object with exactly one field, `build_events`. Supported values are
+`["workflow_dispatch"]` and `["workflow_dispatch", "schedule"]`. This is an
+independently reviewed deployment event allowlist, not Candidate self-approval.
+No real configuration/pin/Variable is created or changed by this implementation.
+
+Schedule preflight requires schema 2 explicitly allowing `schedule`, exact
+reviewed code/checkout and policy pins, a currently valid continuous scope,
+live matching repository/run/actor/first-attempt/workflow/default-branch evidence,
+and matching remote Registry bytes. It does not call the Owner registration
+identity verifier with a forged dispatch. The schedule actor is an observed
+initiator, not an approver; no reviewer is invented or required for that receipt.
+Existing manual Owner/designated-actor checks remain unchanged.
+
+The read-only preflight checks implementation bytes and ARM Hosted context,
+but does not require the extraction parser installation or claim its runtime was
+validated. Actual manual construction still calls the frozen runtime validator.
+`--preflight-only` only restricts operations; it cannot enable a build. It writes
+an exclusive external receipt through the CLI; the verification function itself
+has no filesystem writes. `--work` remains a required argument for CLI
+compatibility but is never created during preflight.
+
+The existing scope grammar, sealed V1 policy/assessment and Candidate restrictions
+still require `scheduled_execution: false`. Allowing a schedule in deployment
+therefore establishes only a context observation, not construction authority.
+An eligible scheduled update returns `BLOCKED`, `execute_candidate: false`, with:
+
+- `SCHEDULED_SCOPE_AUTHORIZATION_NOT_IMPLEMENTED`.
+- `DURABLE_REPEAT_EXECUTION_PROTECTION_NOT_ESTABLISHED`.
+
+An identical target/Parent pair returns `NO_UPDATE`; missing/stale/expired or
+mismatched evidence fails closed. The ordinary executor also independently
+rejects scheduled construction, even with a valid schedule preflight context.
+The manual job remains dispatch-only. No unconditional scheduled build switch,
+new exact-target policy, Owner approval bypass or live Registry change exists.
+
+### Stable execution key and deliberate scheduling limit
+
+`parent_comparison.execution_key` binds repository ID, selected Parent ID and
+package/reference, exact target SHAs, Registry/scope policy and execution contract.
+It excludes operation run IDs and detector baseline/formatting. Thus repeating
+the same proposed execution has the same key even when Candidate IDs differ.
+This is a deterministic comparison key, **not implemented durable deduplication**.
+
+Current Actions Artifacts expire, and the existing schema-2 Release publisher
+and approval/registration interfaces do not accept this new Candidate format.
+There is no verified durable completed-execution record for it. Pending or failed
+runs and deleted/expired Artifacts cannot prove successful completion or absence
+of duplicates. Accordingly this task chooses the explicitly allowed fallback:
+only scheduled preflight is wired; unattended construction stays disabled.
+Future enabling requires a separately reviewed versioned schedule-capable scope
+contract, durable verified completion/race handling, new-format delivery and
+P4.1 compatibility, independently reviewed deployment pins, then real Hosted
+acceptance. Existing `REGISTRATION_ONLY` entries stay ineligible.
+
+### Version boundary
+
+Part A's `genuine-continuous-candidate-v1` verifier/constructor is retained in
+checkpoint `15be431d09a655bc5960f64256b1d3fd9a4e3121`. Part B explicitly uses
+`genuine-continuous-candidate-v2` because its sealed authority evidence now binds
+the Parent-relative comparison. Historical schema-2, Controlled V1 and controlled
+lifecycle verifiers stay byte-for-byte unchanged. No previous genuine-format
+package is relabelled, silently repinned or claimed verifiable with different
+implementation bytes: inspect a V1 package with its reviewed V1 checkout and
+independent pins. No real V1 deployment or sealed genuine research experiment
+was generated during Part A's offline tests.
+
+### Regression command
+
+Use the full command under `docs/continuous_execution.md` (219 tests), appending:
+
+```text
+test_continuous_lifecycle test_genuine_continuous_execution test_owner_manual_baseline_approval
+```
+
+This exercises the real miniature extraction/full parity/frozen R2 and replay,
+manual authorization, scheduled context mismatch and missing authorization,
+Parent-relative static-baseline contradictions, stable execution keys, schedule
+build refusal, CLI receipts and actual Workflow shells. All GitHub/source
+publication observations are explicit mocks; they do not establish Hosted
+Owner authority or official-source execution. Part B remains uncommitted.
+
+### Part B recorded result
+
+Full offline regression: **290 tests passed in 181.180 seconds**, including
+32 genuine-format tests and the existing Owner, controlled lifecycle and legacy
+regressions. Compilation, YAML parsing, actual Workflow shell tests/Bash syntax,
+whitespace and frozen runtime/contract checks passed. The miniature execution
+reused 46/48 files and 45 chunks, extracted two files, removed one, passed full
+parity and evaluated/replayed all 128 Candidate and 128 Full combinations.
+These remain disposable fixtures with mocked GitHub observations.
+
+The observed current V2 implementation contract digest is
+`6d3c6ecb8115b083e1a947e4c81ddaee90427830de738934e1d18e5809ce01e1`.
+It is not an independently approved deployment pin; no deployment was repinned.
+
+| Acceptance field | Result |
+| --- | --- |
+| Genuine Executor checkpoint | `15be431d09a655bc5960f64256b1d3fd9a4e3121`, five files; Part A 280 tests passed |
+| Scheduled detection routing | Read-only preflight wired and offline tested |
+| Scheduled authorization | Explicit event/context verification only; construction BLOCKED |
+| Detector-to-Parent consistency | Parent-relative comparison verified; original detector preserved |
+| Repeat-execution protection | Stable key verified; durable completion/race protection NOT IMPLEMENTED |
+| Manual continuous build | Preserved; actual miniature build offline verified |
+| Scheduled continuous build | DISABLED; both executor and job routing reject construction |
+| Incremental/full parity | Actual miniature `PARITY_PASS` |
+| Frozen R2/replay | Actual miniature 128 combinations each and replay passed |
+| Candidate Artifact delivery | Packaging and Workflow shell contracts offline verified; not Hosted verified |
+| Offline tests | 290 PASS |
+| Historical C1 / Controlled V1 | Unchanged contracts verified |
+| Genuine Hosted validation | NOT_PERFORMED |
+| GitHub Owner approval | NOT_ESTABLISHED by offline tests |
+| Trusted registration | NOT_PERFORMED |
+| Production deployment | NOT_AUTHORIZED |
+| Working tree | Five Part B files modified, index empty; no Part B commit |
+| Git Push / other GitHub operations | NOT_PERFORMED |
+
+Authoritative Registry/Policies, runtime lock, benchmark, Owner approval verifier,
+legacy scope/execution/lifecycle modules, original C1/C2 evidence and stable
+Gradio were not modified. `QUALITY_REVIEW_REQUIRED`,
+`Q1_NOT_QUALIFIED_FOR_VERSION_PAIR`, P8 `BLOCKED` and production
+`NOT_AUTHORIZED` remain in force. Only the Part A checkpoint was committed.

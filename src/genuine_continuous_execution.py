@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+from urllib.parse import quote
 
 from scripts.prepare_ci_v2_update import detection
 from . import approval_evidence as ev, ci_v2_research as c
@@ -16,8 +17,10 @@ from . import owner_manual_baseline_approval as owner, parent_r2_anchor as ancho
 from . import schema2_workflow as workflow, trusted_snapshot as trust, upstream_provenance as source
 from .corpus_snapshot import checked_file, digest, file_digest, read_json, read_records, write_json
 from .research_quality import evaluate_quality
+from . import scheduled_construction as scheduled, continuous_completion as completion
 
-FORMAT = 'genuine-continuous-candidate-v1'
+FORMAT = 'genuine-continuous-candidate-v2'
+SCHEDULED_FORMAT = 'genuine-continuous-candidate-v3'
 PROJECTION = 'genuine-continuous-evaluator-v1'
 PURPOSE = 'CONTINUOUS_CANDIDATE_BUILD_ONLY'
 DEPLOYMENT_FIELDS = {'schema_version', 'purpose', 'repository', 'repository_id', 'default_branch',
@@ -29,7 +32,9 @@ PIN_FIELDS = {'expected_execution_contract_sha256', 'expected_policy_sha256',
     'expected_candidate_id', 'expected_manifest_sha256'}
 EXTRA_EVIDENCE = {'deployment.json', 'authority-policy.json', 'authorization-context.json', 'detection.json'}
 FILES = ('src/genuine_continuous_execution.py', 'scripts/run_continuous_ci_v2.py',
-         'scripts/prepare_ci_v2_update.py', '.github/workflows/upstream_refresh.yml')
+         'scripts/prepare_ci_v2_update.py', '.github/workflows/upstream_refresh.yml',
+         'src/scheduled_construction.py', 'src/continuous_completion.py',
+         'src/candidate_release_archive.py', 'src/historical_candidate_archive.py', 'scripts/publish_continuous_candidate.py')
 LIMITS = {**c.RESTRICTIONS, 'automatic_registration': False,
           'Q1': 'Q1_NOT_QUALIFIED_FOR_VERSION_PAIR', 'P8': 'BLOCKED'}
 
@@ -43,16 +48,29 @@ def contract(project):
         name: file_digest(checked_file(project, name)) for name in FILES}, 'controlled_v1': v1.contract(project)}
 
 
-def _implementation(project, expected):
+def _implementation(project, expected, *, runtime=True):
     need(scope._hash(expected) and digest(contract(project)) == expected, 'EXECUTION_CONTRACT_MISMATCH')
     need(contract(project) == contract(Path(__file__).resolve().parents[1]), 'EXECUTING_CODE_MISMATCH')
-    c.frozen_runtime(project)
+    if runtime:
+        c.frozen_runtime(project)
 
 
 def _shape(value):
-    need(isinstance(value, dict) and set(value) == DEPLOYMENT_FIELDS
-         and type(value['schema_version']) is int and value['schema_version'] == 1
+    need(isinstance(value, dict) and type(value.get('schema_version')) is int
+         and value['schema_version'] in (1, 2, 3)
+         and set(value) == (DEPLOYMENT_FIELDS if value['schema_version'] == 1 else DEPLOYMENT_FIELDS | {'build_events'}
+                           | ({'scheduled_policy_path', 'scheduled_policy_sha256', 'completion_witness'} if value['schema_version'] == 3 else set()))
          and value['purpose'] == PURPOSE, 'INVALID_CONTINUOUS_DEPLOYMENT')
+    if value['schema_version'] >= 2:
+        need(value['build_events'] in (['workflow_dispatch'], ['workflow_dispatch', 'schedule']),
+             'INVALID_BUILD_EVENTS')
+    if value['schema_version'] == 3:
+        need(isinstance(value['scheduled_policy_path'], str)
+             and re.fullmatch(r'configs/[A-Za-z0-9_.-]+\.json', value['scheduled_policy_path'])
+             and scope._hash(value['scheduled_policy_sha256']), 'INVALID_SCHEDULED_POLICY_PIN')
+        witness = value['completion_witness']
+        need(witness is None or isinstance(witness, dict) and set(witness) == {'execution_key', 'receipt_sha256'}
+             and all(scope._hash(v) for v in witness.values()), 'INVALID_COMPLETION_WITNESS')
     need(isinstance(value['repository'], str)
          and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', value['repository'])
          and type(value['repository_id']) is int and value['repository_id'] > 0
@@ -93,6 +111,9 @@ def _checkout(project, config):
     for name in (*FILES, config['authority_policy_path'], config['continuous_policy_path'], config['registry_path']):
         source._git(project, 'ls-files', '--error-unmatch', '--', name)
         checked_file(project, name)
+    if config['schema_version'] == 3:
+        source._git(project, 'ls-files', '--error-unmatch', '--', config['scheduled_policy_path'])
+        checked_file(project, config['scheduled_policy_path'])
 
 
 def _detected(path, policy):
@@ -103,18 +124,94 @@ def _detected(path, policy):
     return observed
 
 
-def _authority(project, detection_path, config, config_sha):
+def _comparison(observed, selected, entry, config):
+    """V2 compares against its selected Parent, never the detector's V1 baseline.
+
+    This stable key identifies a proposed execution, not a durable completion or
+    an exactly-once claim. Run IDs and detector formatting are deliberately absent.
+    """
+    ref = entry['reference']
+    subject = {'schema_version': 1, 'purpose': PURPOSE, 'repository_id': config['repository_id'],
+        'parent_key': selected, 'parent_id': ref['node_id'], 'parent_package_checksum': ref['package_checksum'],
+        'reference_sha256': entry['expected_reference_sha256'], 'upstreams': observed['upstreams'],
+        'policy_sha256': config['continuous_policy_sha256'], 'registry_sha256': config['registry_sha256'],
+        'execution_contract_sha256': config['execution_contract_sha256']}
+    if config['schema_version'] == 3:
+        subject['scheduled_policy_sha256'] = config['scheduled_policy_sha256']
+    return {'subject': subject, 'execution_key': digest(subject),
+            'parent_upstreams': ref['upstreams'], 'detector_baseline_upstreams': observed['baseline_upstreams'],
+            'detector_update_reported': observed['update_reported'],
+            'update_available': observed['upstreams'] != ref['upstreams']}
+
+
+def _scheduled_context():
+    """Runtime identifiers only. They acquire meaning through reviewed pins/API checks."""
+    need(os.environ.get('GITHUB_EVENT_NAME') == 'schedule', 'UNSUPPORTED_BUILD_EVENT')
+    try:
+        numbers = {key: int(os.environ.get(env, '')) for key, env in (
+            ('run_id', 'GITHUB_RUN_ID'), ('run_attempt', 'GITHUB_RUN_ATTEMPT'),
+            ('actor_id', 'GITHUB_ACTOR_ID'), ('repository_id', 'GITHUB_REPOSITORY_ID'))}
+    except (ValueError, TypeError) as error:
+        raise c.GateError('GITHUB_RUNTIME_CONTEXT_UNAVAILABLE', 'GITHUB_RUNTIME_CONTEXT_UNAVAILABLE') from error
+    return {**numbers, 'repository': os.environ.get('GITHUB_REPOSITORY'),
+            'head_sha': os.environ.get('GITHUB_SHA'), 'ref': os.environ.get('GITHUB_REF')}
+
+
+def _scheduled_identity(client, policy, context):
+    """Build-only schedule observation; deliberately separate from Owner approval.
+
+    The actor is recorded and matched, but is NOT inferred to be a reviewer or
+    granted approval authority. Reviewed deployment pins must opt into this event.
+    """
+    repo = policy['repository']; prefix = 'repos/' + repo
+    need(owner._positive(context['run_id']) and type(context['run_attempt']) is int
+         and context['run_attempt'] == 1 and owner._positive(context['actor_id']), 'INVALID_OR_REPLAYED_WORKFLOW_ATTEMPT')
+    need(context['ref'] == 'refs/heads/' + policy['default_branch'], 'WORKFLOW_REF_NOT_DEFAULT_BRANCH')
+    repository = owner._api(client, prefix, 'GITHUB_REPOSITORY_UNAVAILABLE')
+    need(repository.get('id') == policy['repository_id']
+         and repository.get('full_name', '').casefold() == repo.casefold()
+         and repository.get('default_branch') == policy['default_branch']
+         and repository.get('private') is True, 'GITHUB_REPOSITORY_IDENTITY_MISMATCH')
+    observed = owner._api(client, prefix + '/actions/runs/' + str(context['run_id']), 'GITHUB_WORKFLOW_RUN_UNAVAILABLE')
+    need(observed.get('id') == context['run_id'] and observed.get('event') == 'schedule'
+         and observed.get('status') == 'in_progress' and type(observed.get('run_attempt')) is int
+         and observed['run_attempt'] == 1
+         and observed.get('head_sha') == context['head_sha']
+         and observed.get('head_branch') == policy['default_branch']
+         and observed.get('repository', {}).get('id') == policy['repository_id']
+         and observed.get('repository', {}).get('full_name', '').casefold() == repo.casefold(),
+         'GITHUB_WORKFLOW_RUN_BINDING_MISMATCH')
+    actor, trigger = observed.get('actor', {}), observed.get('triggering_actor', {})
+    need(actor.get('id') == context['actor_id'] and actor.get('type') == 'User'
+         and trigger.get('id') == actor['id'] and trigger.get('type') == 'User', 'GITHUB_WORKFLOW_ACTOR_MISMATCH')
+    workflow_id = observed.get('workflow_id')
+    need(owner._positive(workflow_id), 'GITHUB_WORKFLOW_ID_UNAVAILABLE')
+    definition = owner._api(client, prefix + '/actions/workflows/' + str(workflow_id), 'GITHUB_WORKFLOW_METADATA_UNAVAILABLE')
+    need(definition.get('id') == workflow_id and definition.get('path') == policy['workflow_path'], 'GITHUB_WORKFLOW_PATH_MISMATCH')
+    branch = owner._api(client, prefix + '/git/ref/heads/' + quote(policy['default_branch'], safe='/'),
+                        'CURRENT_DEFAULT_BRANCH_HEAD_UNAVAILABLE')
+    need(branch.get('ref') == context['ref'] and branch.get('object', {}).get('sha') == context['head_sha'], 'STALE_WORKFLOW_COMMIT')
+    created = scope._time(observed.get('created_at'))
+    return {'repository': repo, 'repository_id': policy['repository_id'], 'workflow_id': workflow_id,
+        'workflow_path': policy['workflow_path'], 'run_id': context['run_id'], 'run_attempt': 1,
+        'event': 'schedule', 'branch': policy['default_branch'], 'commit_sha': context['head_sha'],
+        'actor_id': actor['id'], 'actor_login': actor.get('login'), 'run_created_at': created.isoformat()}
+
+
+def _authority(project, detection_path, config, config_sha, *, runtime=True):
     """Internal Hosted boundary; no injectable approval provider or CLI override."""
     current, _, current_sha = deployment()
     need(current == config and current_sha == config_sha, 'DEPLOYMENT_CHANGED_DURING_EXECUTION')
-    _checkout(project, config); _implementation(project, config['execution_contract_sha256'])
+    _checkout(project, config); _implementation(project, config['execution_contract_sha256'], runtime=runtime)
     authority = owner._policy(project, project / config['authority_policy_path'], config['authority_policy_sha256'])
     need(all(authority[k] == config[k] for k in ('repository', 'repository_id', 'default_branch',
              'workflow_path', 'registry_path')), 'AUTHORITY_DOMAIN_MISMATCH')
     policy = scope.load_policy(project, config['continuous_policy_path'], config['continuous_policy_sha256'])
     registry = scope._read_pinned(project, config['registry_path'], config['registry_sha256'])
     observed = _detected(detection_path, policy)
-    context = owner.context_from_environment()
+    event = os.environ.get('GITHUB_EVENT_NAME')
+    need(event in config.get('build_events', ['workflow_dispatch']), 'BUILD_EVENT_NOT_PREAUTHORIZED')
+    context = _scheduled_context() if event == 'schedule' else owner.context_from_environment()
     need(os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
          and os.environ.get('RUNNER_ARCH') == 'ARM64'
          and os.environ.get('GITHUB_WORKSPACE') == str(project.resolve())
@@ -124,18 +221,21 @@ def _authority(project, detection_path, config, config_sha):
          and os.environ.get('GITHUB_WORKFLOW_SHA') == config['implementation_revision']
          and os.environ.get('GITHUB_WORKFLOW_REF') == config['repository'] + '/' + config['workflow_path']
              + '@refs/heads/' + config['default_branch'], 'TRUSTED_CONTINUOUS_WORKFLOW_NOT_ESTABLISHED')
-    inputs = context['dispatch_inputs']
-    requested, exact = inputs.get('build_continuous_ci_v2'), inputs.get('build_ci_v2', False)
-    need(set(inputs) <= {'build_ci_v2', 'build_continuous_ci_v2'}
-         and (requested is True or type(requested) is str and requested == 'true')
-         and (exact is False or type(exact) is str and exact == 'false'), 'CONTINUOUS_BUILD_NOT_EXPLICITLY_REQUESTED')
     client = owner.GitHubCLI()
-    actor = owner._github_identity(client, authority, context)
+    if event == 'workflow_dispatch':
+        inputs = context['dispatch_inputs']
+        requested, exact = inputs.get('build_continuous_ci_v2'), inputs.get('build_ci_v2', False)
+        need(set(inputs) <= {'build_ci_v2', 'build_continuous_ci_v2'}
+             and (requested is True or type(requested) is str and requested == 'true')
+             and (exact is False or type(exact) is str and exact == 'false'), 'CONTINUOUS_BUILD_NOT_EXPLICITLY_REQUESTED')
+        actor = owner._github_identity(client, authority, context)
+        actor = {**{k: v for k, v in actor.items() if k != 'approved_at'}, 'run_created_at': actor['approved_at']}
+    else:
+        actor = _scheduled_identity(client, authority, context)
     need(owner._remote_registry_bytes(client, authority, actor['commit_sha'])
          == checked_file(project, config['registry_path']).read_bytes(), 'REMOTE_REGISTRY_MISMATCH')
     selected, entry, _ = scope._parent(project, registry, policy)
-    actor = {**{k: v for k, v in actor.items() if k != 'approved_at'},
-             'run_created_at': actor['approved_at']}
+    scheduled_policy = scheduled.load(project, config) if event == 'schedule' and config['schema_version'] == 3 else None
     return {'schema_version': 1, 'purpose': PURPOSE, 'deployment_sha256': config_sha,
             'workflow_run': actor, 'detection_sha256': observed['detection_sha256'],
             'upstreams': observed['upstreams'], 'selected_parent': selected,
@@ -143,8 +243,40 @@ def _authority(project, detection_path, config, config_sha):
             'continuous_policy_sha256': config['continuous_policy_sha256'],
             'registry_sha256': config['registry_sha256'],
             'authority_policy_sha256': config['authority_policy_sha256'],
-            'authority': 'MAINTAINER_GOVERNED_WORKFLOW_BUILD_CONTEXT',
+            'parent_comparison': _comparison(observed, selected, entry, config),
+            'authority': ('AUTHORIZED_SCHEDULED_BUILD_CONTEXT' if scheduled_policy else 'PREAUTHORIZED_SCHEDULE_CONTEXT_ONLY' if event == 'schedule'
+                          else 'MAINTAINER_GOVERNED_WORKFLOW_BUILD_CONTEXT'),
+            **({'scheduled_policy_sha256': config['scheduled_policy_sha256'],
+                'scheduled_policy_canonical_sha256': digest(scheduled_policy)} if scheduled_policy else {}),
             'research_approval': 'NOT_GRANTED', 'production_promotion': 'NOT_AUTHORIZED'}
+
+
+def preflight(project, detection_path):
+    """Read-only schedule routing. It never downloads, builds or authorizes approval.
+
+    V1 scope policy still forbids schedules; there is no durable dedup store for
+    this Candidate format. Both conditions must be resolved before construction.
+    """
+    project, detection_path = Path(project), Path(detection_path)
+    config, _, pin = deployment()
+    authority = _authority(project, detection_path, config, pin, runtime=False)
+    comparison = authority['parent_comparison']; is_schedule = authority['workflow_run']['event'] == 'schedule'
+    blockers = (['SCHEDULED_SCOPE_AUTHORIZATION_NOT_IMPLEMENTED',
+                 'DURABLE_REPEAT_EXECUTION_PROTECTION_NOT_ESTABLISHED'] if is_schedule and comparison['update_available'] else [])
+    storage = None
+    if is_schedule and config['schema_version'] == 3 and comparison['update_available']:
+        policy = scheduled.load(project, config)
+        scheduled.mutex(project, config, authority)
+        client = completion.Client(config['repository'], os.environ.get('GH_TOKEN') or os.environ.get('TRUSTED_RELEASE_TOKEN'))
+        witness = config['completion_witness']
+        expected = witness['receipt_sha256'] if witness and witness['execution_key'] == comparison['execution_key'] else None
+        storage = completion.lookup(project, client, config, policy['release_prefix'], comparison['execution_key'], expected_receipt_sha256=expected)
+        blockers = []
+    return {'status': 'BLOCKED' if blockers else 'BUILD_CONTEXT_VERIFIED' if comparison['update_available'] else 'NO_UPDATE',
+            'execute_candidate': False, 'blockers': blockers, 'authority_observation': authority,
+            'completion_observation': storage, 'deduplication': 'NOT_ESTABLISHED' if storage is None else storage['state'],
+            'source_relationships': 'NOT_YET_VERIFIED',
+            'parent_package_qualification': 'NOT_PERFORMED', **LIMITS}
 
 
 def _clone_sources(work, ref, revisions):
@@ -165,17 +297,21 @@ def _projection(candidate_id, identity):
 
 def _artifacts(root, selection):
     return {**v1._deterministic(root, selection), **{
-        'evidence/' + name: file_digest(root / 'evidence' / name) for name in sorted(EXTRA_EVIDENCE)}}
+        'evidence/' + name: file_digest(root / 'evidence' / name) for name in sorted(EXTRA_EVIDENCE
+              | ({'scheduled-policy.json'} if (root / 'evidence/scheduled-policy.json').exists() else set()))}}
 
 
 def _archive_bindings(root, config, authority, assessed, metadata):
     """Archived consistency only: never calls an API or establishes fresh authority."""
     identity = metadata['identity']; subject = assessed['subject']
     policy = read_json(root / 'evidence/policy-original.json'); v1._archive_policy(policy)
+    is_scheduled = identity['scheduled_execution']
     need(set(authority) == {'schema_version', 'purpose', 'deployment_sha256', 'workflow_run',
          'detection_sha256', 'upstreams', 'selected_parent', 'reference_sha256',
          'continuous_policy_sha256', 'registry_sha256', 'authority_policy_sha256', 'authority',
-         'research_approval', 'production_promotion'} and type(authority['schema_version']) is int
+         'research_approval', 'production_promotion', 'parent_comparison'}
+         | ({'scheduled_policy_sha256', 'scheduled_policy_canonical_sha256'} if is_scheduled else set())
+         and type(authority['schema_version']) is int
          and authority['schema_version'] == 1, 'INVALID_ARCHIVED_AUTHORITY_CONTEXT')
     authority_policy = read_json(root / 'evidence/authority-policy.json')
     need(set(authority_policy) == owner.POLICY_FIELDS and authority_policy['enabled'] is True
@@ -189,9 +325,10 @@ def _archive_bindings(root, config, authority, assessed, metadata):
          and all(type(assessed[k]) is type(v) and assessed[k] == v for k, v in c.RESTRICTIONS.items()),
          'INVALID_ARCHIVED_SCOPE_ASSESSMENT')
     observed = _detected(root / 'evidence/detection.json', policy)
-    need(observed['update_reported'] and observed['upstreams'] == identity['upstreams']
+    need(observed['upstreams'] == identity['upstreams']
          and observed['detection_sha256'] == authority['detection_sha256'] == identity['detection_sha256']
-         and authority['purpose'] == PURPOSE and authority['authority'] == 'MAINTAINER_GOVERNED_WORKFLOW_BUILD_CONTEXT'
+         and authority['purpose'] == PURPOSE and authority['authority'] == (
+             'AUTHORIZED_SCHEDULED_BUILD_CONTEXT' if is_scheduled else 'MAINTAINER_GOVERNED_WORKFLOW_BUILD_CONTEXT')
          and authority['research_approval'] == 'NOT_GRANTED' and authority['production_promotion'] == 'NOT_AUTHORIZED'
          and authority['upstreams'] == identity['upstreams']
          and authority['deployment_sha256'] == identity['deployment_sha256']
@@ -205,9 +342,17 @@ def _archive_bindings(root, config, authority, assessed, metadata):
          and all(actor[k] == config[k] for k in ('repository', 'repository_id', 'workflow_path'))
          and actor['commit_sha'] == config['implementation_revision']
          and actor['branch'] == config['default_branch'] and actor['run_attempt'] == 1
-         and actor['event'] == 'workflow_dispatch', 'ARCHIVED_WORKFLOW_BINDING_MISMATCH')
+         and actor['event'] == ('schedule' if is_scheduled else 'workflow_dispatch'), 'ARCHIVED_WORKFLOW_BINDING_MISMATCH')
+    if is_scheduled:
+        need(config['schema_version'] == 3 and 'schedule' in config['build_events']
+             and file_digest(root / 'evidence/scheduled-policy.json') == config['scheduled_policy_sha256']
+             == authority['scheduled_policy_sha256'], 'ARCHIVED_SCHEDULE_PIN_MISMATCH')
+        scheduled.archived(root, config, authority)
     ref = read_json(root / 'evidence/reference.json')
     registry = read_json(root / 'evidence/registry.json'); entry = registry['baselines'][subject['parent_key']]
+    comparison = _comparison(observed, subject['parent_key'], entry, config)
+    need(authority['parent_comparison'] == comparison and comparison['update_available'],
+         'ARCHIVED_PARENT_COMPARISON_MISMATCH')
     need(authority['selected_parent'] == subject['parent_key']
          and entry['reference'] == ref and entry['expected_reference_sha256'] == identity['reference_sha256']
          and digest(entry) == subject['parent_entry_sha256'] and digest(ref) == subject['reference_sha256']
@@ -244,7 +389,9 @@ def verify_package(project, root, *, expected_execution_contract_sha256, expecte
     need(scope._hash(expected_manifest_sha256) and file_digest(checked_file(root, 'checksums.json'))
          == expected_manifest_sha256, 'INDEPENDENT_PACKAGE_SEAL_MISMATCH')
     v1._check_seal(root)
-    need(set(v1._files(root / 'evidence')) == set(v1.EVIDENCE) | EXTRA_EVIDENCE, 'INVALID_GENUINE_EVIDENCE_FILES')
+    metadata = read_json(root / 'candidate/genuine-candidate.json'); identity = metadata['identity']
+    need(set(v1._files(root / 'evidence')) == set(v1.EVIDENCE) | EXTRA_EVIDENCE
+         | ({'scheduled-policy.json'} if identity.get('scheduled_execution') is True else set()), 'INVALID_GENUINE_EVIDENCE_FILES')
     for name, expected in (('policy-original.json', expected_policy_sha256), ('registry.json', expected_registry_sha256),
                            ('deployment.json', expected_deployment_sha256)):
         need(scope._hash(expected) and file_digest(root / 'evidence' / name) == expected, 'EXTERNAL_EVIDENCE_PIN_MISMATCH')
@@ -254,15 +401,16 @@ def verify_package(project, root, *, expected_execution_contract_sha256, expecte
          and config['registry_sha256'] == expected_registry_sha256
          and file_digest(root / 'evidence/authority-policy.json') == config['authority_policy_sha256']
          and read_json(root / 'evidence/execution-contract.json') == contract(project), 'ARCHIVED_DEPLOYMENT_MISMATCH')
-    metadata = read_json(root / 'candidate/genuine-candidate.json'); identity = metadata['identity']
+    expected_format = SCHEDULED_FORMAT if identity.get('scheduled_execution') is True else FORMAT
     need(set(metadata) == {'format', 'schema_version', 'candidate_id', 'identity'}
-         and metadata['format'] == FORMAT and type(metadata['schema_version']) is int and metadata['schema_version'] == 1
+         and metadata['format'] == expected_format and type(metadata['schema_version']) is int and metadata['schema_version'] == 1
          and set(identity) == v1.IDENTITY_FIELDS | {'deployment_sha256', 'detection_sha256', 'authorization_context_sha256'}
-         and identity['format'] == FORMAT and type(identity['schema_version']) is int and identity['schema_version'] == 1
+         and identity['format'] == expected_format and type(identity['schema_version']) is int and identity['schema_version'] == 1
          and identity['provenance_type'] == 'GENUINE_UPSTREAM'
          and metadata['candidate_id'] == expected_candidate_id == 'sha256-' + digest(identity), 'INVALID_GENUINE_CANDIDATE_IDENTITY')
     c.validate_request('formal', 'genuine-continuous', identity['upstreams'])
-    need(all(type(identity[k]) is type(v) and identity[k] == v for k, v in c.RESTRICTIONS.items())
+    need(all(type(identity[k]) is type(v) and identity[k] == v for k, v in c.RESTRICTIONS.items() if k != 'scheduled_execution')
+         and type(identity['scheduled_execution']) is bool
          and identity['automatic_registration'] is False, 'CHANGED_RESEARCH_RESTRICTIONS')
     need(identity['execution_contract_sha256'] == expected_execution_contract_sha256
          and identity['policy_raw_sha256'] == expected_policy_sha256
@@ -346,12 +494,12 @@ def verify_package(project, root, *, expected_execution_contract_sha256, expecte
 
 def _result(metadata):
     identity = metadata['identity']
-    return {'status': 'GENUINE_CONTINUOUS_CANDIDATE_BUILT', 'format': FORMAT, 'candidate_id': metadata['candidate_id'],
+    return {'status': 'GENUINE_CONTINUOUS_CANDIDATE_BUILT', 'format': metadata['format'], 'candidate_id': metadata['candidate_id'],
         'generation': identity['generation'], 'parent_id': identity['parent']['node_id'],
         'upstreams': identity['upstreams'], 'source_state': identity['target_source_state'],
         'corpus_sha256': identity['artifacts']['candidate/corpus.jsonl'], 'parity': 'PARITY_PASS',
         'combinations_each': 128, 'independent_replay': 'VERIFIED', 'research_approval': 'NOT_GRANTED',
-        'trusted_parent_eligibility': 'NOT_GRANTED', **LIMITS}
+        'trusted_parent_eligibility': 'NOT_GRANTED', **LIMITS, 'scheduled_execution': identity['scheduled_execution']}
 
 
 def execute(project, detection_path, work, output):
@@ -362,10 +510,27 @@ def execute(project, detection_path, work, output):
     policy = scope.load_policy(project, config['continuous_policy_path'], config['continuous_policy_sha256'])
     observed = _detected(detection_path, policy)
     source._new_output(output, (project, detection_path, work))
-    if not observed['update_reported']:
-        result = {'status': 'NO_UPDATE', 'execute_candidate': False, **LIMITS}
+    if not authority['parent_comparison']['update_available']:
+        result = {'status': 'NO_UPDATE', 'execute_candidate': False,
+                  'authority_observation': authority, 'deduplication': 'NOT_ESTABLISHED', **LIMITS}
         output.mkdir(); write_json(output / 'no-update.json', result)
         return result
+    is_scheduled = authority['workflow_run']['event'] == 'schedule'
+    schedule_policy = None
+    if is_scheduled:
+        need(config['schema_version'] == 3, 'SCHEDULED_CONSTRUCTION_NOT_AUTHORIZED')
+        schedule_policy = scheduled.load(project, config)
+        need(schedule_policy['publication_enabled'] is True
+             and os.environ.get('CONTINUOUS_CONSTRUCTION_ENABLED') == 'true'
+             and os.environ.get('CONTINUOUS_PUBLICATION_ENABLED') == 'true', 'SCHEDULED_OPERATIONAL_ACTIVATION_DISABLED')
+        scheduled.mutex(project, config, authority)
+        client = completion.Client(config['repository'], os.environ.get('GH_TOKEN') or os.environ.get('TRUSTED_RELEASE_TOKEN'))
+        key = authority['parent_comparison']['execution_key']; witness = config['completion_witness']
+        expected = witness['receipt_sha256'] if witness and witness['execution_key'] == key else None
+        prior = completion.lookup(project, client, config, schedule_policy['release_prefix'], key, expected_receipt_sha256=expected)
+        if prior['state'] == 'PUBLISHED_AND_VERIFIED':
+            result = {'status': 'NO_BUILD', 'execute_candidate': False, 'completion': prior, **LIMITS}
+            output.mkdir(); write_json(output / 'duplicate.json', result); return result
     registry_path = project / config['registry_path']; registry = read_json(registry_path)
     _, entry, _ = scope._parent(project, registry, policy); ref = entry['reference']
     source._new_output(work, (project, detection_path, output))
@@ -396,6 +561,8 @@ def execute(project, detection_path, work, output):
             ('registry.json', registry_path), ('authority-policy.json', project / config['authority_policy_path']),
             ('parent-rows.json', work / 'parent-rows.json'), ('detection.json', detection_path)):
         shutil.copyfile(origin, evidence / name)
+    if is_scheduled:
+        shutil.copyfile(project / config['scheduled_policy_path'], evidence / 'scheduled-policy.json')
     (evidence / 'deployment.json').write_text(raw_config, encoding='utf-8')
     for name, value in (('assessment.json', assessed), ('reference.json', ref), ('authorization-context.json', authority),
             ('historical-rows.json', qualified['historical_rows']), ('execution-contract.json', contract(project))):
@@ -405,7 +572,7 @@ def execute(project, detection_path, work, output):
     revalidate()
     v1._assemble(project, stage, stage / 'parent', arguments['target_source'], selection)
     revalidate()
-    identity = {'schema_version': 1, 'format': FORMAT, 'provenance_type': 'GENUINE_UPSTREAM',
+    identity = {'schema_version': 1, 'format': SCHEDULED_FORMAT if is_scheduled else FORMAT, 'provenance_type': 'GENUINE_UPSTREAM',
         'generation': parent['generation'] + 1,
         'parent': {'node_id': ref['node_id'], 'package_checksum': ref['package_checksum'], 'generation': parent['generation'],
                    'source_state': ref['source_state'], 'upstreams': ref['upstreams'], 'corpus_sha256': ref['corpus_sha256']},
@@ -415,9 +582,10 @@ def execute(project, detection_path, work, output):
         'registry_raw_sha256': config['registry_sha256'], 'reference_sha256': entry['expected_reference_sha256'],
         'scope_subject_sha256': digest(assessed['subject']), 'deployment_sha256': config_sha,
         'detection_sha256': observed['detection_sha256'], 'authorization_context_sha256': digest(authority),
-        'artifacts': _artifacts(stage, selection), 'automatic_registration': False, **c.RESTRICTIONS}
+        'artifacts': _artifacts(stage, selection), 'automatic_registration': False, **c.RESTRICTIONS,
+        'scheduled_execution': is_scheduled}
     candidate_id = 'sha256-' + digest(identity)
-    metadata = {'schema_version': 1, 'format': FORMAT, 'candidate_id': candidate_id, 'identity': identity}
+    metadata = {'schema_version': 1, 'format': identity['format'], 'candidate_id': candidate_id, 'identity': identity}
     write_json(stage / 'candidate/genuine-candidate.json', metadata)
     write_json(stage / 'candidate/candidate.json', _projection(candidate_id, identity))
     source.full_reference(project, arguments['target_source'], stage / 'full', observed['upstreams'], ref['build_fingerprint'])
@@ -443,6 +611,7 @@ def execute(project, detection_path, work, output):
     result = verify_package(project, stage, **pins)
     delivery = work / 'delivery'; delivery.mkdir(); stage.replace(delivery / 'run')
     transport = c.package_candidate(delivery / 'run', delivery / 'candidate.tar.gz')
+    transport['scheduled_execution'] = is_scheduled
     c.check_archive(delivery / 'candidate.tar.gz', transport['transport_sha256'])
     write_json(delivery / 'verification-inputs.json', pins)
     write_json(delivery / 'transport.json', transport)
