@@ -57,14 +57,15 @@ def _implementation(project, expected, *, runtime=True):
 
 def _shape(value):
     need(isinstance(value, dict) and type(value.get('schema_version')) is int
-         and value['schema_version'] in (1, 2, 3)
+         and value['schema_version'] in (1, 2, 3, 4)
          and set(value) == (DEPLOYMENT_FIELDS if value['schema_version'] == 1 else DEPLOYMENT_FIELDS | {'build_events'}
-                           | ({'scheduled_policy_path', 'scheduled_policy_sha256', 'completion_witness'} if value['schema_version'] == 3 else set()))
+                           | ({'scheduled_policy_path', 'scheduled_policy_sha256', 'completion_witness'} if value['schema_version'] >= 3 else set())
+                           | ({'completion_authority'} if value['schema_version'] == 4 else set()))
          and value['purpose'] == PURPOSE, 'INVALID_CONTINUOUS_DEPLOYMENT')
     if value['schema_version'] >= 2:
         need(value['build_events'] in (['workflow_dispatch'], ['workflow_dispatch', 'schedule']),
              'INVALID_BUILD_EVENTS')
-    if value['schema_version'] == 3:
+    if value['schema_version'] >= 3:
         need(isinstance(value['scheduled_policy_path'], str)
              and re.fullmatch(r'configs/[A-Za-z0-9_.-]+\.json', value['scheduled_policy_path'])
              and scope._hash(value['scheduled_policy_sha256']), 'INVALID_SCHEDULED_POLICY_PIN')
@@ -83,6 +84,8 @@ def _shape(value):
     for name in ('authority_policy_sha256', 'continuous_policy_sha256', 'registry_sha256', 'execution_contract_sha256'):
         need(scope._hash(value[name]), 'INVALID_DEPLOYMENT_PIN')
     need(value['workflow_path'] == '.github/workflows/upstream_refresh.yml', 'UNSUPPORTED_CONTINUOUS_WORKFLOW')
+    if value['schema_version'] == 4:
+        completion.validate_authority(value)
     branch = value['default_branch']
     need(isinstance(branch, str) and re.fullmatch('[A-Za-z0-9][A-Za-z0-9._/-]{0,127}', branch)
          and not any(x in branch for x in ('..', '//', '/.', '.lock')) and not branch.endswith(('/', '.')),
@@ -111,7 +114,7 @@ def _checkout(project, config):
     for name in (*FILES, config['authority_policy_path'], config['continuous_policy_path'], config['registry_path']):
         source._git(project, 'ls-files', '--error-unmatch', '--', name)
         checked_file(project, name)
-    if config['schema_version'] == 3:
+    if config['schema_version'] >= 3:
         source._git(project, 'ls-files', '--error-unmatch', '--', config['scheduled_policy_path'])
         checked_file(project, config['scheduled_policy_path'])
 
@@ -136,7 +139,7 @@ def _comparison(observed, selected, entry, config):
         'reference_sha256': entry['expected_reference_sha256'], 'upstreams': observed['upstreams'],
         'policy_sha256': config['continuous_policy_sha256'], 'registry_sha256': config['registry_sha256'],
         'execution_contract_sha256': config['execution_contract_sha256']}
-    if config['schema_version'] == 3:
+    if config['schema_version'] >= 3:
         subject['scheduled_policy_sha256'] = config['scheduled_policy_sha256']
     return {'subject': subject, 'execution_key': digest(subject),
             'parent_upstreams': ref['upstreams'], 'detector_baseline_upstreams': observed['baseline_upstreams'],
@@ -235,7 +238,7 @@ def _authority(project, detection_path, config, config_sha, *, runtime=True):
     need(owner._remote_registry_bytes(client, authority, actor['commit_sha'])
          == checked_file(project, config['registry_path']).read_bytes(), 'REMOTE_REGISTRY_MISMATCH')
     selected, entry, _ = scope._parent(project, registry, policy)
-    scheduled_policy = scheduled.load(project, config) if event == 'schedule' and config['schema_version'] == 3 else None
+    scheduled_policy = scheduled.load(project, config) if event == 'schedule' and config['schema_version'] >= 3 else None
     return {'schema_version': 1, 'purpose': PURPOSE, 'deployment_sha256': config_sha,
             'workflow_run': actor, 'detection_sha256': observed['detection_sha256'],
             'upstreams': observed['upstreams'], 'selected_parent': selected,
@@ -252,10 +255,10 @@ def _authority(project, detection_path, config, config_sha, *, runtime=True):
 
 
 def preflight(project, detection_path):
-    """Read-only schedule routing. It never downloads, builds or authorizes approval.
+    """Schedule observations without construction, approval or remote writes.
 
-    V1 scope policy still forbids schedules; there is no durable dedup store for
-    this Candidate format. Both conditions must be resolved before construction.
+    Completion inspection may download a sealed archive into owned temporary
+    storage. Old deployments remain blocked until their explicit gates exist.
     """
     project, detection_path = Path(project), Path(detection_path)
     config, _, pin = deployment()
@@ -264,7 +267,7 @@ def preflight(project, detection_path):
     blockers = (['SCHEDULED_SCOPE_AUTHORIZATION_NOT_IMPLEMENTED',
                  'DURABLE_REPEAT_EXECUTION_PROTECTION_NOT_ESTABLISHED'] if is_schedule and comparison['update_available'] else [])
     storage = None
-    if is_schedule and config['schema_version'] == 3 and comparison['update_available']:
+    if is_schedule and config['schema_version'] >= 3 and comparison['update_available']:
         policy = scheduled.load(project, config)
         scheduled.mutex(project, config, authority)
         client = completion.Client(config['repository'], os.environ.get('GH_TOKEN') or os.environ.get('TRUSTED_RELEASE_TOKEN'))
@@ -344,7 +347,7 @@ def _archive_bindings(root, config, authority, assessed, metadata):
          and actor['branch'] == config['default_branch'] and actor['run_attempt'] == 1
          and actor['event'] == ('schedule' if is_scheduled else 'workflow_dispatch'), 'ARCHIVED_WORKFLOW_BINDING_MISMATCH')
     if is_scheduled:
-        need(config['schema_version'] == 3 and 'schedule' in config['build_events']
+        need(config['schema_version'] >= 3 and 'schedule' in config['build_events']
              and file_digest(root / 'evidence/scheduled-policy.json') == config['scheduled_policy_sha256']
              == authority['scheduled_policy_sha256'], 'ARCHIVED_SCHEDULE_PIN_MISMATCH')
         scheduled.archived(root, config, authority)
@@ -518,7 +521,7 @@ def execute(project, detection_path, work, output):
     is_scheduled = authority['workflow_run']['event'] == 'schedule'
     schedule_policy = None
     if is_scheduled:
-        need(config['schema_version'] == 3, 'SCHEDULED_CONSTRUCTION_NOT_AUTHORIZED')
+        need(config['schema_version'] >= 3, 'SCHEDULED_CONSTRUCTION_NOT_AUTHORIZED')
         schedule_policy = scheduled.load(project, config)
         need(schedule_policy['publication_enabled'] is True
              and os.environ.get('CONTINUOUS_CONSTRUCTION_ENABLED') == 'true'

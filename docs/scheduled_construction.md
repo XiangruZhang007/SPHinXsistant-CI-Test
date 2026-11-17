@@ -1,5 +1,9 @@
 # Scheduled construction and immutable completion evidence
 
+**Historical implementation record:** the original schema-3 results and limits
+below are preserved. The subsequent schema-4 automatic witness integration and
+current Hosted acceptance instructions are in [completion_witness.md](completion_witness.md).
+
 This is local implementation for controlled Hosted acceptance. Real scheduled
 construction and publication remain disabled: no deployment policy, Variables,
 Release, dispatch, approval or Registry update was performed.

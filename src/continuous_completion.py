@@ -1,7 +1,8 @@
 """Private immutable completion transport; never an approval or Parent Registry.
 
-An independently retained completion digest is mandatory for duplicate skipping.
-Discovery without that witness is deliberately BLOCKED, not self-authenticated.
+Schema 3 requires a retained receipt pin. Schema 4 can instead delegate technical
+completion trust to explicitly reviewed repository Release writers and producer
+deployments. API observations are not cryptographic producer attestations.
 """
 import hashlib
 from pathlib import Path
@@ -16,6 +17,34 @@ from .corpus_snapshot import digest, file_digest, read_json, write_json
 
 STATES = ('NOT_STARTED', 'BUILDING', 'BUILD_VERIFIED', 'PUBLISHING', 'PUBLISHED_AND_VERIFIED')
 ASSETS = ('candidate.tar.gz', 'release-manifest.json', 'completion.json')
+TRUST_MODEL = 'MAINTAINER_GOVERNED_RELEASE_WRITERS'
+AUTHORITY_FIELDS = {'schema_version', 'trust_model', 'workflow_id', 'publisher_actor_id',
+                    'release_prefix', 'previous_producers'}
+
+
+def validate_authority(config):
+    """Closed, independently pinned deployment authority; never Candidate input."""
+    value = config.get('completion_authority')
+    need(isinstance(value, dict) and set(value) == AUTHORITY_FIELDS
+         and type(value['schema_version']) is int and value['schema_version'] == 1
+         and value['trust_model'] == TRUST_MODEL, 'INVALID_COMPLETION_AUTHORITY')
+    need(all(type(value[k]) is int and value[k] > 0 for k in ('workflow_id', 'publisher_actor_id')),
+         'INVALID_COMPLETION_AUTHORITY_IDENTITY')
+    tag(value['release_prefix'], '0' * 64)
+    previous = value['previous_producers']
+    need(isinstance(previous, list) and len(previous) <= 32, 'INVALID_PREVIOUS_PRODUCERS')
+    seen = {config['implementation_revision']}
+    for producer in previous:
+        need(isinstance(producer, dict) and set(producer) == {
+            'implementation_revision', 'deployment_sha256', 'execution_contract_sha256'}
+             and isinstance(producer['implementation_revision'], str)
+             and re.fullmatch('[0-9a-f]{40}', producer['implementation_revision'])
+             and all(isinstance(producer[k], str) and re.fullmatch('[0-9a-f]{64}', producer[k])
+                     for k in ('deployment_sha256', 'execution_contract_sha256')),
+             'INVALID_PREVIOUS_PRODUCER_PIN')
+        need(producer['implementation_revision'] not in seen, 'DUPLICATE_PRODUCER_AUTHORITY')
+        seen.add(producer['implementation_revision'])
+    return value
 
 
 def need(ok, reason):
@@ -121,8 +150,13 @@ def _download(client, asset, path, expected):
     need(size == asset['size'] and file_digest(path) == expected, 'COMPLETION_ASSET_HASH_MISMATCH')
 
 
-def verify_completed(project, client, config, release, execution_key, *, expected_receipt_sha256):
-    """Independent witness + API provenance + actual full package verification."""
+def verify_completed(project, client, config, release, execution_key, *, expected_receipt_sha256,
+                     producer_pins=None):
+    """Authenticated expected bytes + API observations + full sealed verification.
+
+    producer_pins is supplied only after independently configured producer trust
+    has been checked. It never substitutes for a live consumer authorization.
+    """
     from . import genuine_continuous_execution as g
     need(isinstance(expected_receipt_sha256, str) and re.fullmatch('[0-9a-f]{64}', expected_receipt_sha256),
          'INDEPENDENT_COMPLETION_WITNESS_REQUIRED')
@@ -142,6 +176,13 @@ def verify_completed(project, client, config, release, execution_key, *, expecte
              and receipt['execution_key'] == execution_key, 'INVALID_COMPLETION_RECEIPT')
         _download(client, by_name['release-manifest.json'], root / 'release-manifest.json', receipt['manifest_sha256'])
         manifest = read_json(root / 'release-manifest.json')
+        if producer_pins is not None:
+            need(manifest['verification_pins']['expected_deployment_sha256'] == producer_pins['deployment_sha256']
+                 and manifest['verification_pins']['expected_execution_contract_sha256'] == producer_pins['execution_contract_sha256'],
+                 'UNREVIEWED_PRODUCER_DEPLOYMENT')
+            need(all(manifest['verification_pins'][pin] == config[field] for pin, field in (
+                ('expected_policy_sha256', 'continuous_policy_sha256'),
+                ('expected_registry_sha256', 'registry_sha256'))), 'COMPLETION_SCOPE_MISMATCH')
         recorded = receipt['build_origin']
         need(origin(client, config, recorded['run_id'], recorded['run_attempt']) == recorded == manifest['build_origin'],
              'COMPLETION_ORIGIN_MISMATCH')
@@ -150,6 +191,7 @@ def verify_completed(project, client, config, release, execution_key, *, expecte
              and manifest['quality'] == 'QUALITY_REVIEW_REQUIRED'
              and manifest['Q1'] == 'Q1_NOT_QUALIFIED_FOR_VERSION_PAIR', 'COMPLETION_RESTRICTION_MISMATCH')
         _download(client, by_name['candidate.tar.gz'], root / 'candidate.tar.gz', manifest['candidate_archive']['sha256'])
+        need(manifest['candidate_archive']['size'] == by_name['candidate.tar.gz']['size'], 'COMPLETION_PACKAGE_SIZE_MISMATCH')
         trust.extract_regular(root / 'candidate.tar.gz', root / 'run', manifest['candidate_archive']['sha256'])
         verified = g.verify_package(project, root / 'run', **manifest['verification_pins'])
         authority = read_json(root / 'run/evidence/authorization-context.json')
@@ -164,6 +206,114 @@ def verify_completed(project, client, config, release, execution_key, *, expecte
             'research_approval': 'NOT_GRANTED', 'production_promotion': 'NOT_AUTHORIZED'}
 
 
+def _publisher_job(client, config, recorded, release):
+    """Historical publication must have finished, unlike same-run final checks."""
+    from .continuous_build_policy import _time
+    base = '/repos/' + client.repository
+    endpoint = base + f'/actions/runs/{recorded["run_id"]}/attempts/{recorded["run_attempt"]}'
+    run = client._api('GET', endpoint)
+    need(run.get('status') == 'completed' and run.get('conclusion') == 'success',
+         'HISTORICAL_PUBLICATION_NOT_SUCCESSFUL_MANUAL_RECOVERY_REQUIRED')
+    jobs = client._api('GET', endpoint + '/jobs?per_page=100&page=1')
+    rows, count = jobs.get('jobs'), jobs.get('total_count')
+    need(type(count) is int and 0 <= count <= 100 and isinstance(rows, list) and len(rows) == count,
+         'INCOMPLETE_PUBLICATION_JOB_INVENTORY')
+    matches = [j for j in rows if j.get('name') == 'publish-continuous-candidate']
+    need(len(matches) == 1, 'MISSING_OR_AMBIGUOUS_PUBLISHER_JOB')
+    job = matches[0]
+    need(type(job.get('id')) is int and job['id'] > 0 and job.get('id') != recorded['job_id']
+         and job.get('run_id') == recorded['run_id'] and job.get('head_sha') == config['implementation_revision']
+         and job.get('status') == 'completed' and job.get('conclusion') == 'success',
+         'PUBLISHER_JOB_NOT_SUCCESSFUL_MANUAL_RECOVERY_REQUIRED')
+    build = next((j for j in rows if j.get('id') == recorded['job_id']), {})
+    start, end = _time(job.get('started_at')), _time(job.get('completed_at'))
+    # Release.created_at may be the target commit date, NOT draft creation.
+    # GitHub documents this distinction; only published_at is a publish event.
+    published = _time(release.get('published_at'))
+    need(_time(run.get('created_at')) <= _time(build.get('started_at'))
+         <= _time(build.get('completed_at')) <= start <= published <= end,
+         'COMPLETION_PUBLICATION_TIME_MISMATCH')
+    for asset in release['assets']:
+        need(start <= _time(asset.get('created_at')) <= _time(asset.get('updated_at')) <= published,
+             'COMPLETION_ASSET_TIME_MISMATCH')
+    return job['id']
+
+
+def _automatic_witness(project, client, config, release, prefix, execution_key):
+    """Repository-governed delegation, NOT independent cryptographic attestation.
+
+    All principals with Release write access are trusted under this explicit
+    model. A shared actions bot ID does not establish exclusive workflow access.
+    The consumer's deployment is independently pinned, not loaded from assets.
+    """
+    from . import genuine_continuous_execution as g
+    current, _, deployment_pin = g.deployment()
+    need(current == config and client.repository == config['repository'], 'UNTRUSTED_COMPLETION_CONSUMER')
+    g._checkout(project, config); g._implementation(project, config['execution_contract_sha256'])
+    authority = validate_authority(config)
+    need(authority['release_prefix'] == prefix, 'COMPLETION_NAMESPACE_NOT_AUTHORIZED')
+    need(release.get('draft') is False and release.get('immutable') is True
+         and type(release.get('id')) is int and release['id'] > 0, 'COMPLETION_RELEASE_NOT_IMMUTABLE')
+    # Re-read the immutable object by numeric ID; do not trust a caller's cache.
+    expected_id = release['id']
+    release = client._api('GET', f'/repos/{client.repository}/releases/{expected_id}')
+    need(type(release.get('id')) is int and release['id'] == expected_id
+         and release.get('tag_name') == tag(prefix, execution_key) and release.get('draft') is False
+         and release.get('immutable') is True, 'COMPLETION_RELEASE_IDENTITY_MISMATCH')
+    assets = release.get('assets')
+    need(isinstance(assets, list) and len(assets) == len(ASSETS)
+         and {a.get('name') for a in assets} == set(ASSETS)
+         and len({a.get('id') for a in assets}) == len(ASSETS), 'INVALID_COMPLETION_ASSET_INVENTORY')
+    def trusted_writer(user):
+        return isinstance(user, dict) and type(user.get('id')) is int and user['id'] == authority['publisher_actor_id'] and user.get('type') == 'Bot'
+    need(trusted_writer(release.get('author')) and all(trusted_writer(a.get('uploader')) for a in assets),
+         'UNTRUSTED_COMPLETION_WRITER')
+    need(all(isinstance(a.get('digest'), str) and re.fullmatch('sha256:[0-9a-f]{64}', a['digest']) for a in assets),
+         'AUTHENTICATED_COMPLETION_DIGEST_UNAVAILABLE')
+    receipt_asset = next(a for a in assets if a['name'] == 'completion.json')
+    observed = receipt_asset.get('digest')
+    need(isinstance(observed, str) and re.fullmatch('sha256:[0-9a-f]{64}', observed),
+         'AUTHENTICATED_COMPLETION_DIGEST_UNAVAILABLE')
+    receipt_pin = observed[7:]
+    with tempfile.TemporaryDirectory(prefix='completion-authority-') as tmp:
+        path = Path(tmp) / 'completion.json'
+        _download(client, receipt_asset, path, receipt_pin)
+        receipt = read_json(path)
+    need(isinstance(receipt, dict) and set(receipt) == {
+        'schema_version', 'state', 'execution_key', 'manifest_sha256', 'build_origin'}
+         and type(receipt['schema_version']) is int and receipt['schema_version'] == 1
+         and receipt['state'] == 'BUILD_VERIFIED' and receipt['execution_key'] == execution_key,
+         'INVALID_COMPLETION_RECEIPT')
+    recorded = receipt['build_origin']; revision = recorded.get('implementation_revision')
+    if revision == config['implementation_revision']:
+        producer = {'implementation_revision': revision, 'deployment_sha256': deployment_pin,
+                    'execution_contract_sha256': config['execution_contract_sha256']}
+    else:
+        matches = [p for p in authority['previous_producers'] if p['implementation_revision'] == revision]
+        need(len(matches) == 1, 'HISTORICAL_PRODUCER_NOT_REVIEWED')
+        producer = matches[0]
+    need(producer['execution_contract_sha256'] == digest(g.contract(project)),
+         'HISTORICAL_PRODUCER_ORIGINAL_VERIFIER_REQUIRED')
+    producer_config = {**config, 'implementation_revision': revision}
+    need(recorded.get('workflow_id') == authority['workflow_id'] and recorded.get('event') == 'schedule'
+         and origin(client, producer_config, recorded['run_id'], recorded['run_attempt']) == recorded,
+         'UNTRUSTED_COMPLETION_PRODUCER')
+    need(release.get('target_commitish') == revision, 'COMPLETION_RELEASE_TARGET_MISMATCH')
+    ref = client._api('GET', f'/repos/{client.repository}/git/ref/tags/' + quote(release['tag_name'], safe=''))
+    obj = ref.get('object', {})
+    if obj.get('type') == 'tag':
+        need(isinstance(obj.get('sha'), str) and re.fullmatch('[0-9a-f]{40}', obj['sha']), 'INVALID_COMPLETION_TAG_OBJECT')
+        obj = client._api('GET', f'/repos/{client.repository}/git/tags/' + obj['sha']).get('object', {})
+    need(obj.get('type') == 'commit' and obj.get('sha') == revision, 'COMPLETION_TAG_COMMIT_MISMATCH')
+    publisher_id = _publisher_job(client, producer_config, recorded, release)
+    result = verify_completed(project, client, producer_config, release, execution_key,
+                              expected_receipt_sha256=receipt_pin, producer_pins=producer)
+    return {**result, 'completion_trust': TRUST_MODEL, 'cryptographic_producer_attestation': False,
+            'producer_commit': revision, 'producer_run_id': recorded['run_id'], 'publisher_job_id': publisher_id,
+            'consumer_commit': config['implementation_revision'], 'consumer_deployment_sha256': deployment_pin,
+            'replay': 'SEALED_REPLAY_INSPECTED'}
+
+
 def lookup(project, client, config, prefix, execution_key, *, expected_receipt_sha256=None):
     release = client._api('GET', '/repos/' + client.repository + '/releases/tags/' + quote(tag(prefix, execution_key), safe=''), allow_404=True)
     if release is None:
@@ -173,6 +323,8 @@ def lookup(project, client, config, prefix, execution_key, *, expected_receipt_s
         # Not a duplicate. Retry may build; existing draft is preserved. Publishing
         # requires explicit reviewed recovery instead of overwriting its assets.
         return {'state': 'PUBLISHING', 'execution_key': execution_key, 'release_id': release['id']}
+    if expected_receipt_sha256 is None and config['schema_version'] == 4:
+        return _automatic_witness(project, client, config, release, prefix, execution_key)
     return verify_completed(project, client, config, release, execution_key, expected_receipt_sha256=expected_receipt_sha256)
 
 
@@ -204,7 +356,7 @@ def publish(project, client, config, prepared, *, prefix):
     need(checked.get('draft') is True and len(checked.get('assets', [])) == len(ASSETS)
          and {a.get('name') for a in checked['assets']} == set(ASSETS), 'INCOMPLETE_PUBLICATION')
     need(origin(client, config, recorded['run_id'], recorded['run_attempt']) == recorded, 'STALE_PUBLICATION_ORIGIN')
-    if config['schema_version'] == 3:
+    if config['schema_version'] >= 3:
         current, _, current_pin = g.deployment()
         need(current == config and current_pin == manifest['verification_pins']['expected_deployment_sha256'],
              'STALE_PUBLICATION_DEPLOYMENT')

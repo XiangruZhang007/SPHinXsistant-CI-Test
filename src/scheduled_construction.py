@@ -38,8 +38,11 @@ def validate(value, config, *, current=True):
 
 
 def load(project, config):
-    need(config['schema_version'] == 3 and 'schedule' in config['build_events'], 'SCHEDULED_POLICY_NOT_CONFIGURED')
+    need(config['schema_version'] >= 3 and 'schedule' in config['build_events'], 'SCHEDULED_POLICY_NOT_CONFIGURED')
     value = scope._read_pinned(project, config['scheduled_policy_path'], config['scheduled_policy_sha256'])
+    if config['schema_version'] == 4:
+        need(config['completion_authority']['release_prefix'] == value.get('release_prefix'),
+             'COMPLETION_NAMESPACE_NOT_AUTHORIZED')
     return validate(value, config)
 
 
