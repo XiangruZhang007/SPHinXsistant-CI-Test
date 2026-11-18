@@ -24,6 +24,10 @@ PINS = {'expected_candidate_release_sha256', 'expected_reference_sha256',
 REQUEST_FIELDS = PINS | {'schema_version', 'registry_key', 'proposed_entry',
                         'candidate_release', 'approval_policy_path'}
 REGISTRATION_REQUEST_FIELDS = REQUEST_FIELDS - {'expected_build_policy_sha256'}
+LOCAL_REQUEST_FIELDS = (REGISTRATION_REQUEST_FIELDS - {
+    'candidate_release', 'expected_candidate_release_sha256'}) | {'local_evidence'}
+LOCAL_EVIDENCE_FIELDS = {'evidence_origin', 'hosted_validation', 'candidate_id',
+    'baseline_id', 'corpus_sha256', 'descriptor_sha256', 'archive_sha256'}
 STORAGE_FIELDS = {'kind', 'repository', 'repository_id', 'release_id', 'asset_id',
                   'tag', 'asset_name', 'asset_size', 'immutable_required'}
 REFERENCE_FIELDS = {'schema_version', 'package_format', 'accepted_package_schema', 'node_id',
@@ -91,12 +95,16 @@ def load_request(path, expected_sha):
             'REQUEST_SHA256_MISMATCH')
     request = evidence._json(raw)
     require(isinstance(request, dict) and type(request.get('schema_version')) is int
-            and request['schema_version'] in (1, 2),
+            and request['schema_version'] in (1, 2, 3),
             'UNSUPPORTED_REQUEST_SCHEMA')
-    registration_only = request['schema_version'] == 2
-    names = REGISTRATION_REQUEST_FIELDS if registration_only else REQUEST_FIELDS
+    local = request['schema_version'] == 3
+    registration_only = request['schema_version'] in (2, 3)
+    names = (LOCAL_REQUEST_FIELDS if local else
+             REGISTRATION_REQUEST_FIELDS if registration_only else REQUEST_FIELDS)
     fields(request, names, 'INVALID_REQUEST_FIELDS')
     pins = PINS - {'expected_build_policy_sha256'} if registration_only else PINS
+    if local:
+        pins = pins - {'expected_candidate_release_sha256'}
     require(all(evidence._sha(request[k]) for k in pins), 'INVALID_REQUEST_PIN')
     require(isinstance(request['registry_key'], str)
             and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', request['registry_key']),
@@ -111,8 +119,11 @@ def load_request(path, expected_sha):
     if not registration_only:
         config_file(entry['build_policy_path'])
     ref = entry['reference']
+    reference_fields = (REFERENCE_FIELDS | {'notices'}
+                        if isinstance(ref, dict) and type(ref.get('schema_version')) is int
+                        and ref['schema_version'] == 3 else REFERENCE_FIELDS)
     require(isinstance(ref, dict) and set(ref) in
-            (REFERENCE_FIELDS, REFERENCE_FIELDS | {'candidate_id'}), 'INVALID_REFERENCE_FIELDS')
+            (reference_fields, reference_fields | {'candidate_id'}), 'INVALID_REFERENCE_FIELDS')
     fields(ref['authorization'], AUTH_FIELDS, 'INVALID_REFERENCE_AUTHORIZATION_FIELDS')
     fields(ref['upstreams'], {'SPHinXsys', 'SPHinXsim'}, 'INVALID_UPSTREAM_FIELDS')
     for name in ('node_id', 'source_state'):
@@ -127,11 +138,27 @@ def load_request(path, expected_sha):
     locator(ref['storage'])
     locator(ref['parent_rows_storage'])
     evidence.transport.validate_reference(ref, request['expected_reference_sha256'], remote=True)
+    if ref['schema_version'] == 3:
+        locator(ref['notices']['storage'])
     require(ref['package_format'] == 'schema2-research-baseline', 'P4_1_BASELINE_REQUIRED')
-    release = request['candidate_release']
-    evidence._release_contract(release, request['expected_candidate_release_sha256'])
-    for item in release['assets'].values():
-        locator(item['storage'])
+    if local:
+        value = request['local_evidence']
+        fields(value, LOCAL_EVIDENCE_FIELDS, 'INVALID_LOCAL_EVIDENCE_FIELDS')
+        require(value['evidence_origin'] == 'LOCAL_RESEARCH_EXECUTION'
+                and value['hosted_validation'] == 'HOSTED_NOT_RUN', 'LOCAL_ORIGIN_REQUIRED')
+        require(all(evidence._sha(value[k]) for k in (
+            'descriptor_sha256', 'archive_sha256', 'corpus_sha256')), 'INVALID_LOCAL_EVIDENCE_PIN')
+        require(all(isinstance(value[k], str) and re.fullmatch(r'sha256-[0-9a-f]{64}', value[k])
+                    for k in ('candidate_id', 'baseline_id')), 'INVALID_LOCAL_EVIDENCE_IDENTITY')
+        require(value['baseline_id'] == ref['node_id']
+                and value['corpus_sha256'] == ref['corpus_sha256']
+                and ('candidate_id' not in ref or ref['candidate_id'] == value['candidate_id']),
+                'LOCAL_REFERENCE_BINDING_MISMATCH')
+    else:
+        release = request['candidate_release']
+        evidence._release_contract(release, request['expected_candidate_release_sha256'])
+        for item in release['assets'].values():
+            locator(item['storage'])
     policy_path = config_file(request['approval_policy_path'], policy=True)
     policy = owner._policy(PROJECT, policy_path, request['approval_policy_sha256'])
     require(policy['repository'] == ref['storage']['repository']
@@ -162,6 +189,12 @@ def _invoke(args):
         return transaction.recover(PROJECT, args.isolation_directory,
                                    transaction_id=args.transaction_id)
     request, policy = load_request(args.request, args.request_sha256)
+    # Schema 3 is parsing-only until bounded transport and Owner Subject v2 are
+    # reviewed. Never turn parsing success into L1 verification or authorization.
+    if request['schema_version'] == 3:
+        raise InputError('LOCAL_EVIDENCE_TRANSPORT_CONTRACT_NOT_FINALIZED')
+    if request['proposed_entry']['reference']['schema_version'] == 3:
+        raise InputError('REFERENCE_V3_REGISTRATION_INTEGRATION_PENDING')
     values = {k: request[k] for k in PINS if k in request}
     values.update(registry_key=request['registry_key'], proposed_entry=request['proposed_entry'],
                   candidate_release=request['candidate_release'])

@@ -86,6 +86,10 @@ def _inputs(deployment):
     request_path = cli.config_file(deployment['request_path'])
     policy_path = cli.config_file(deployment['approval_policy_path'], policy=True)
     request, checked_policy = cli.load_request(request_path, deployment['request_sha256'])
+    # L2-A adds parsing, not a new Hosted authority/transaction path.
+    _need(request['schema_version'] in (1, 2), 'LOCAL_EVIDENCE_TRANSPORT_CONTRACT_NOT_FINALIZED')
+    _need(request['proposed_entry']['reference']['schema_version'] != 3,
+          'REFERENCE_V3_REGISTRATION_INTEGRATION_PENDING')
     _need(checked_policy == policy_path
           and request['approval_policy_sha256'] == deployment['approval_policy_sha256'],
           'HOSTED_REQUEST_POLICY_BINDING_MISMATCH')
