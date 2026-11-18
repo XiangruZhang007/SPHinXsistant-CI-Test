@@ -508,8 +508,18 @@ class GenuineFormatTests(unittest.TestCase):
     def test_quality_and_old_contracts_preserved(self):
         for key, value in run.LIMITS.items(): self.assertEqual(self.result[key], value)
         self.assertEqual(digest(source.contract(P)), 'b0b43411aef4d716a15a2f0a794071523fbb3c260dc4cb3fc9b2736eed9e1ac1')
-        self.assertEqual(digest(v1.contract(P)), '2d9c41cc55d5f6c7dd8022280e38b7d1ec8ad5d991d7e452396dfa02e19220e3')
-        self.assertEqual(digest(life.contract(P)), 'cf1e270eb655805934dace62e3934041db57202bdfb05d6d5d5a2dd2574ec7a3')
+        # Notice delivery changes transitive implementation bytes. Preserve the
+        # ORIGINAL pins by reconstructing the original contract, rather than
+        # silently repinning sealed historical packages to today's code.
+        historical = deepcopy(v1.contract(P))
+        historical['implementation'].update({
+            'src/trusted_snapshot.py': '4f3b2c2a2a0555d3e7fd5deb93891d38dbee990339989d5e832761e70053a4fe',
+            'src/schema2_workflow.py': '28f063f8cb934c5241044e4babfc17a52dfb53787e2eab8fdaa4b1074c0a856e'})
+        self.assertEqual(digest(historical), '2d9c41cc55d5f6c7dd8022280e38b7d1ec8ad5d991d7e452396dfa02e19220e3')
+        historical_lifecycle = deepcopy(life.contract(P)); historical_lifecycle['execution'] = historical
+        self.assertEqual(digest(historical_lifecycle), 'cf1e270eb655805934dace62e3934041db57202bdfb05d6d5d5a2dd2574ec7a3')
+        self.assertEqual(v1.contract(P), v1.contract(self.project))
+        self.assertNotEqual(digest(v1.contract(P)), digest(historical))
 
     def test_cli_missing_authority_has_sanitized_blocked_receipt(self):
         with patch.dict(os.environ, {'CONTINUOUS_BUILD_DEPLOYMENT_JSON': '', 'CONTINUOUS_BUILD_DEPLOYMENT_SHA256': ''}):

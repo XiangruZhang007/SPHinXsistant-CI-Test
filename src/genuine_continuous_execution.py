@@ -301,7 +301,10 @@ def _projection(candidate_id, identity):
 def _artifacts(root, selection):
     return {**v1._deterministic(root, selection), **{
         'evidence/' + name: file_digest(root / 'evidence' / name) for name in sorted(EXTRA_EVIDENCE
-              | ({'scheduled-policy.json'} if (root / 'evidence/scheduled-policy.json').exists() else set()))}}
+              | ({'scheduled-policy.json'} if (root / 'evidence/scheduled-policy.json').exists() else set()))},
+        **({'notices/' + name: file_digest(root / 'notices' / name)
+            for name in ('companion.zip', 'verification.json')}
+           if trust.notices_binding(read_json(root / 'evidence/reference.json')) is not None else {})}
 
 
 def _archive_bindings(root, config, authority, assessed, metadata):
@@ -421,6 +424,7 @@ def verify_package(project, root, *, expected_execution_contract_sha256, expecte
          and identity['reference_sha256'] == expected_reference_sha256
          and identity['deployment_sha256'] == expected_deployment_sha256, 'CANDIDATE_EXTERNAL_PIN_MISMATCH')
     ref = read_json(root / 'evidence/reference.json'); trust.validate_reference(ref, expected_reference_sha256)
+    trust.verify_retained_notices(ref, expected_reference_sha256, root)
     need(identity['build_fingerprint'] == ref['build_fingerprint'] == digest(read_json(c.LOCK)['P2']),
          'FROZEN_BUILD_FINGERPRINT_MISMATCH')
     trust.verify_package(project, root / 'parent', ref)
@@ -488,7 +492,8 @@ def verify_package(project, root, *, expected_execution_contract_sha256, expecte
     need(read_json(root / 'result.json') == result, 'RESULT_BINDING_MISMATCH')
     need({p.name for p in root.iterdir()} == {'candidate', 'parent', 'full', 'evidence', 'quality', 'extraction-observations',
         'parent-anchor.json', 'parity.json', 'incremental-replay.json', 'full-replay.json', 'regression-attribution.json',
-        'q1-status.json', 'review-summary.json', 'result.json', 'checksums.json'}, 'UNEXPECTED_GENUINE_PACKAGE_CONTENTS')
+        'q1-status.json', 'review-summary.json', 'result.json', 'checksums.json'}
+        | ({'notices'} if trust.notices_binding(ref) is not None else set()), 'UNEXPECTED_GENUINE_PACKAGE_CONTENTS')
     return {**result, 'verification': 'PACKAGE_INTEGRITY_VERIFIED',
             'replay': 'FRESH_R2_REPLAY' if fresh_replay else 'SEALED_REPLAY_INSPECTED',
             'live_authorization': 'NOT_ESTABLISHED_BY_OFFLINE_VERIFIER',
@@ -543,6 +548,7 @@ def execute(project, detection_path, work, output):
               (ref['parent_rows_storage'], 'parent-rows.json', ref['parent_rows_sha256'])):
         kwargs = {'token': os.environ.get('TRUSTED_RELEASE_TOKEN')} if storage['kind'] == trust.PRIVATE_RELEASE_KIND else {}
         trust.download(storage, work / name, checksum, **kwargs)
+    notices_path = trust.fetch_notices(ref, entry['expected_reference_sha256'], work / 'parent-notices.zip')
     _clone_sources(work, ref, observed['upstreams'])
     arguments = {'expected_policy_sha256': config['continuous_policy_sha256'],
         'expected_registry_sha256': config['registry_sha256'], 'revisions': observed['upstreams'],
@@ -555,7 +561,10 @@ def execute(project, detection_path, work, output):
         need(file_digest(work / 'parent.tar.gz') == ref['transport_sha256'], 'PARENT_TRANSPORT_CHANGED')
     revalidate()
     stage = work / 'package'; stage.mkdir()
-    trust.restore(project, work / 'parent.tar.gz', stage / 'parent', ref, entry['expected_reference_sha256'])
+    trust.retain_notices(ref, entry['expected_reference_sha256'], notices_path, stage)
+    notice_arguments = {'notices_path': notices_path} if trust.notices_binding(ref) is not None else {}
+    trust.restore(project, work / 'parent.tar.gz', stage / 'parent', ref,
+                  entry['expected_reference_sha256'], **notice_arguments)
     qualified = anchor.qualify_parent_anchor(project, stage / 'parent', ref, entry['expected_reference_sha256'],
                                              work / 'parent-rows.json', fresh_replay=True)
     parent = source.verify(project, stage / 'parent', ref['build_fingerprint'], expected_id=ref['node_id'])

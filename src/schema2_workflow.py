@@ -152,7 +152,7 @@ def diagnostics(project, output, spec, parent_rows, target_rows, bindings, *, q1
 
 
 def run_local(project, archive, base_source, target_source, output, ref, expected_ref_sha, policy_path,
-              expected_policy_sha, parent_rows_path, *, q1_inputs=None, q1_sha=None):
+              expected_policy_sha, parent_rows_path, *, q1_inputs=None, q1_sha=None, notices_path=None):
     """Genuine P2/research path; restored Parents must qualify before building."""
     from . import upstream_provenance as u
     from .approval_evidence import BENCHMARK
@@ -168,15 +168,18 @@ def run_local(project, archive, base_source, target_source, output, ref, expecte
            'AUTHORIZATION_FAILED', 'Workflow accepts genuine authorized upstream transitions only')
     _research_parent_scope(ref, policy)
     c.need(file_digest(parent_rows_path) == ref['parent_rows_sha256'], 'AUTHORIZATION_FAILED', 'Parent R2 anchor mismatch')
+    trust.verify_notices(ref, expected_ref_sha, notices_path)
     protected = (project, archive, base_source, target_source, policy_path, parent_rows_path)
     if q1_inputs is not None: protected += (Path(q1_inputs).parent,)
     u._new_output(output, protected)
     output.mkdir()
+    trust.retain_notices(ref, expected_ref_sha, notices_path, output)
     write_json(output / 'trusted-reference.json', ref)
     shutil.copyfile(policy_path, output / 'build-policy.json')
     shutil.copyfile(parent_rows_path, output / 'parent-raw-results.json')
     shutil.copyfile(project / BENCHMARK, output / 'benchmark.json')
-    info = trust.restore(project, archive, output / 'parent', ref, expected_ref_sha)
+    notice_arguments = {'notices_path': notices_path} if trust.notices_binding(ref) is not None else {}
+    info = trust.restore(project, archive, output / 'parent', ref, expected_ref_sha, **notice_arguments)
     write_json(output / 'parent-verification.json', info)
     parent = output / 'parent'; fp = ref['build_fingerprint']
     anchor = qualify_parent_anchor(project, parent, ref, expected_ref_sha, parent_rows_path)
@@ -213,6 +216,7 @@ def run_local(project, archive, base_source, target_source, output, ref, expecte
     u.verify_sources(project, target_source, policy['scope']['target_upstreams'])
     c.need(file_digest(policy_path) == expected_policy_sha and file_digest(parent_rows_path) == ref['parent_rows_sha256'],
            'AUTHORIZATION_FAILED', 'Inputs changed during run')
+    trust.verify_retained_notices(ref, expected_ref_sha, output)
     result = {'schema_version': 2, 'local_integration': 'LOCAL_VALIDATED', 'STRUCTURAL_PARITY': 'PASS',
         'RETRIEVAL_QUALITY_ACCEPTED': False, 'RESEARCH_BASELINE_APPROVED': False,
         'hosted_validation': 'PENDING_HOSTED_REVIEW' if os.environ.get('GITHUB_ACTIONS') == 'true' else 'HOSTED_NOT_RUN',
@@ -236,6 +240,7 @@ def verify_run(project, root, *, expected_ref_sha=None):
     from .approval_evidence import rescore, frozen_implementation, replay, same, BENCHMARK
     root = Path(root); u._payload(root)
     result = read_json(root / 'result.json'); ref = read_json(root / 'trusted-reference.json')
+    trust.verify_retained_notices(ref, expected_ref_sha or digest(ref), root)
     c.need(result['automatic_research_approval'] is False and result['research_baseline_created'] is False
         and result['RESEARCH_BASELINE_APPROVED'] is False and result['RETRIEVAL_QUALITY_ACCEPTED'] is False
         and result['production_promotion'] == 'NOT_AUTHORIZED', 'INVALID_CANDIDATE', 'Archive cannot grant approval')
@@ -293,6 +298,7 @@ def execute_plan(project, plan_path, work, output, *, q1_inputs=None, q1_sha=Non
             trust.download(storage, path, checksum, token=os.environ.get('TRUSTED_RELEASE_TOKEN'))
         else:
             trust.download(storage, path, checksum)
+    notices_path = trust.fetch_notices(ref, entry['expected_reference_sha256'], work / 'parent-notices.zip')
     # New isolated repositories only. Full history is required for ancestry;
     # never fetch/checkout inside protected or operator-provided repositories.
     for label, revisions in [('base-source', ref['upstreams']), ('target-source', planned['upstreams'])]:
@@ -303,9 +309,10 @@ def execute_plan(project, plan_path, work, output, *, q1_inputs=None, q1_sha=Non
     if automatic:
         c.need(plan_auto(project, trust.REGISTRY, planned['upstreams']) == planned,
                'INVALID_REFERENCE', 'Automatic selection changed before construction')
+    notice_arguments = {'notices_path': notices_path} if notices_path is not None else {}
     result = run_local(project, work / 'parent.tar.gz', work / 'base-source', work / 'target-source', output,
         ref, entry['expected_reference_sha256'], checked_file(project, entry['build_policy_path']),
-        entry['build_policy_sha256'], work / 'parent-rows.json', q1_inputs=q1_inputs, q1_sha=q1_sha)
+        entry['build_policy_sha256'], work / 'parent-rows.json', q1_inputs=q1_inputs, q1_sha=q1_sha, **notice_arguments)
     if automatic:
         c.need(plan_auto(project, trust.REGISTRY, planned['upstreams']) == planned,
                'INVALID_REFERENCE', 'Automatic selection changed during execution')

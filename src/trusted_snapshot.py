@@ -26,6 +26,8 @@ RELEASE_DOWNLOAD_HOSTS = frozenset(('github.com', 'release-assets.githubusercont
 FORMATS = {'p2-snapshot-v1': (1, 'EXPLICIT_P2_BOOTSTRAP'),
            'schema2-research-baseline': (2, 'EXPLICIT_RESEARCH_BASELINE_REUSE')}
 DOWNLOAD_IMPLEMENTATION = 'atomic-no-clobber-v2'
+NOTICES_REFERENCE_VERSION = 3
+MAX_NOTICES_BYTES = 16 * 1024**2
 
 
 def validate_reference(ref, expected_sha, *, remote=False, controlled=False):
@@ -34,7 +36,8 @@ def validate_reference(ref, expected_sha, *, remote=False, controlled=False):
         'manifest_sha256', 'transport_sha256', 'source_state', 'upstreams', 'build_fingerprint',
         'corpus_sha256', 'authorization', 'storage', 'parent_rows_sha256'}
     c.need(isinstance(ref, dict) and required <= ref.keys() and type(ref['schema_version']) is int
-           and ref['schema_version'] == 2, 'INVALID_REFERENCE', 'Incomplete schema-2 trust reference')
+           and ref['schema_version'] in (2, NOTICES_REFERENCE_VERSION),
+           'INVALID_REFERENCE', 'Incomplete versioned trust reference')
     c.need(ref['package_format'] in FORMATS, 'INVALID_REFERENCE', 'Unsupported exact package format')
     schema, authorization = FORMATS[ref['package_format']]
     c.need(type(ref['accepted_package_schema']) is int and ref['accepted_package_schema'] == schema,
@@ -67,7 +70,163 @@ def validate_reference(ref, expected_sha, *, remote=False, controlled=False):
                 'INVALID_REFERENCE', 'Private baseline and Parent R2 assets must be distinct assets in the same pinned Release')
     else:
         c.need(not controlled or kind == 'LOCAL_QUALIFICATION_ONLY', 'AUTHORIZATION_FAILED', 'Fixture privileges cannot enter remote trust')
+    if ref['schema_version'] == NOTICES_REFERENCE_VERSION:
+        notices_binding(ref)
+    else:
+        c.need('notices' not in ref, 'INVALID_REFERENCE', 'Notices require reference version 3')
     return ref
+
+
+def notices_binding(ref):
+    """Versioned metadata only; the external reference digest pins this binding.
+
+    Legacy references have no new duty inferred from their old approvals.
+    Metadata validation is not live download authority or research approval.
+    """
+    if ref.get('schema_version') != NOTICES_REFERENCE_VERSION:
+        return None
+    binding = ref.get('notices')
+    c.need(ref.get('package_format') == 'schema2-research-baseline'
+        and isinstance(binding, dict) and set(binding) == {
+            'schema_version', 'baseline_id', 'parent_transport_sha256', 'sha256', 'storage'}
+        and type(binding['schema_version']) is int and binding['schema_version'] == 1
+        and binding['baseline_id'] == ref['node_id']
+        and binding['parent_transport_sha256'] == ref['transport_sha256']
+        and isinstance(binding['sha256'], str) and re.fullmatch('[0-9a-f]{64}', binding['sha256']),
+        'NOTICES_REQUIRED', 'Missing or mismatched mandatory notices binding')
+    stores = [ref.get('storage'), ref.get('parent_rows_storage'), binding['storage']]
+    fields = {'kind', 'repository', 'repository_id', 'release_id', 'tag',
+              'asset_id', 'asset_name', 'asset_size', 'immutable_required'}
+    for s in stores:
+        # Offline shape checks do not manufacture a GitHub runtime identity.
+        # download() still enforces the existing same-repository runtime gate.
+        c.need(isinstance(s, dict) and fields <= s.keys() and s['kind'] == PRIVATE_RELEASE_KIND
+            and isinstance(s['repository'], str)
+            and re.fullmatch(r'[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}', s['repository'])
+            and all(type(s[k]) is int and s[k] > 0 for k in ('repository_id', 'release_id', 'asset_id'))
+            and isinstance(s['tag'], str) and re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,127}', s['tag'])
+            and s['tag'].lower() not in ('latest', 'main', 'master')
+            and isinstance(s['asset_name'], str) and re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,127}', s['asset_name'])
+            and type(s['asset_size']) is int and 0 < s['asset_size'] <= 2 * 1024**3
+            and s['immutable_required'] is True,
+            'INVALID_REFERENCE', 'Invalid private notices delivery locator')
+    c.need(set(binding['storage']) == fields
+        and binding['storage']['asset_size'] <= MAX_NOTICES_BYTES
+        and binding['storage']['asset_name'].endswith('.zip')
+        and all(all(s[k] == stores[0][k] for k in ('repository', 'repository_id', 'release_id', 'tag')) for s in stores)
+        and len({s['asset_id'] for s in stores}) == 3
+        and len({s['asset_name'] for s in stores}) == 3,
+        'INVALID_REFERENCE', 'Notices must be a distinct asset in the exact Parent Release')
+    return binding
+
+
+def verify_notices(ref, expected_ref_sha, path):
+    """Read a pinned ZIP without extracting; internal hashes are not trust pins."""
+    import hashlib
+    import json
+    import stat
+    import zipfile
+    from pathlib import PurePosixPath
+    binding = notices_binding(ref)
+    if binding is None:
+        return None
+    validate_reference(ref, expected_ref_sha)
+    c.need(path is not None, 'NOTICES_REQUIRED', 'Mandatory notices file is missing')
+    path = Path(path)
+    c.need(path.is_file() and not path.is_symlink(), 'NOTICES_REQUIRED', 'Mandatory notices file is missing or unsafe')
+    c.need(path.stat().st_size == binding['storage']['asset_size']
+        and path.stat().st_size <= MAX_NOTICES_BYTES,
+        'NOTICES_INVALID', 'Notices file size mismatch')
+    with path.open('rb') as stream:
+        raw = stream.read(MAX_NOTICES_BYTES + 1)
+    c.need(len(raw) == binding['storage']['asset_size'] and len(raw) <= MAX_NOTICES_BYTES
+        and hashlib.sha256(raw).hexdigest() == binding['sha256'], 'NOTICES_INVALID', 'Notices SHA-256 mismatch')
+    def unique(pairs):
+        obj = {}
+        for key, value in pairs:
+            c.need(key not in obj, 'NOTICES_INVALID', 'Duplicate notices JSON field')
+            obj[key] = value
+        return obj
+    try:
+        import io
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            members = archive.infolist()
+            c.need(0 < len(members) <= 256 and sum(m.file_size for m in members) <= MAX_NOTICES_BYTES,
+                   'NOTICES_INVALID', 'Notices ZIP exceeds size or member limit')
+            files = {}
+            for m in members:
+                name = m.filename; relative = PurePosixPath(name)
+                c.need(name == m.orig_filename and relative.parts and not relative.is_absolute()
+                    and str(relative) == name and not any(p in ('', '.', '..') for p in relative.parts)
+                    and '\\' not in name and ':' not in name and not m.is_dir()
+                    and stat.S_IFMT(m.external_attr >> 16) in (0, stat.S_IFREG)
+                    and m.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+                    and not m.flag_bits & 1 and name not in files,
+                    'NOTICES_INVALID', 'Unsafe or duplicate notices ZIP member')
+                files[name] = archive.read(m)
+            required = {'README.txt', 'DELIVERY.md', 'SHA256SUMS', 'source-and-license-mapping.json'}
+            c.need(required <= files.keys() and any(n.startswith('licenses/') and files[n] for n in files),
+                   'NOTICES_INVALID', 'Required notices documents are missing')
+            expected = {}
+            for line in files['SHA256SUMS'].decode('utf-8').splitlines():
+                match = re.fullmatch(r'([0-9a-f]{64})  (.+)', line)
+                c.need(match is not None and match[2] not in expected, 'NOTICES_INVALID', 'Invalid notices internal checksum manifest')
+                expected[match[2]] = match[1]
+            c.need(set(expected) == set(files) - {'SHA256SUMS'}
+                and all(hashlib.sha256(files[n]).hexdigest() == checksum for n, checksum in expected.items()),
+                'NOTICES_INVALID', 'Notices internal checksum mismatch')
+            subject = json.loads(files['source-and-license-mapping.json'], object_pairs_hook=unique)
+            c.need(isinstance(subject, dict) and subject.get('baseline_id') == ref['node_id']
+                and subject.get('transport_sha256') == ref['transport_sha256'],
+                'NOTICES_INVALID', 'Notices content belongs to a different Parent or transport')
+    except (OSError, ValueError, KeyError, TypeError, UnicodeError, zipfile.BadZipFile, RuntimeError, NotImplementedError):
+        raise c.GateError('NOTICES_INVALID', 'Notices ZIP or internal bindings failed validation') from None
+    c.need(file_digest(path) == binding['sha256'], 'NOTICES_INVALID', 'Notices changed during validation')
+    return {'schema_version': 1, 'status': 'NOTICES_VERIFIED', 'baseline_id': ref['node_id'],
+        'parent_transport_sha256': ref['transport_sha256'], 'reference_sha256': expected_ref_sha,
+        'notices_sha256': binding['sha256'], 'storage': binding['storage'],
+        'internal_manifest_sha256': hashlib.sha256(files['SHA256SUMS']).hexdigest(),
+        'production_promotion': 'NOT_AUTHORIZED'}
+
+
+def fetch_notices(ref, expected_ref_sha, destination):
+    """No new downloader or credentials: use the existing private asset gate."""
+    binding = notices_binding(ref)
+    if binding is None:
+        return None
+    validate_reference(ref, expected_ref_sha, remote=True)
+    download(binding['storage'], destination, binding['sha256'], token=os.environ.get('TRUSTED_RELEASE_TOKEN'))
+    verify_notices(ref, expected_ref_sha, destination)
+    return Path(destination)
+
+
+def retain_notices(ref, expected_ref_sha, path, root):
+    """New delivery attachment, never a member injected into the sealed Parent."""
+    receipt = verify_notices(ref, expected_ref_sha, path)
+    if receipt is None:
+        return None
+    attachment = Path(root) / 'notices'
+    c.need(not attachment.exists() and not attachment.is_symlink(), 'INVALID_OUTPUT', 'Notices output must be new')
+    attachment.mkdir()
+    shutil.copyfile(path, attachment / 'companion.zip')
+    c.need(verify_notices(ref, expected_ref_sha, attachment / 'companion.zip') == receipt,
+           'NOTICES_INVALID', 'Retained notices differ from verified input')
+    from .corpus_snapshot import write_json
+    write_json(attachment / 'verification.json', receipt)
+    return receipt
+
+
+def verify_retained_notices(ref, expected_ref_sha, root):
+    if notices_binding(ref) is None:
+        return None
+    attachment = Path(root) / 'notices'
+    c.need(attachment.is_dir() and not attachment.is_symlink()
+        and {p.name for p in attachment.iterdir()} == {'companion.zip', 'verification.json'},
+        'NOTICES_REQUIRED', 'Retained notices attachment is incomplete')
+    receipt = verify_notices(ref, expected_ref_sha, checked_file(attachment, 'companion.zip'))
+    c.need(read_json(checked_file(attachment, 'verification.json')) == receipt,
+           'NOTICES_INVALID', 'Retained notices receipt mismatch')
+    return receipt
 
 
 def registry_reference(registry, key):
@@ -127,9 +286,15 @@ def extract_regular(archive, destination, expected_sha):
     c.need(file_digest(archive) == expected_sha, 'CORRUPT_DOWNLOAD', 'Archive changed during extraction')
 
 
-def restore(project, archive, destination, ref, expected_sha, *, controlled=False):
+def restore(project, archive, destination, ref, expected_sha, *, controlled=False, notices_path=None):
+    """Restore only after validating mandatory versioned delivery inputs.
+
+    Version 2 keeps its historical behavior. Version 3 requires the actual ZIP,
+    never a saved receipt or caller assertion, even for direct library calls.
+    """
     from . import upstream_provenance as u
     validate_reference(ref, expected_sha, controlled=controlled)
+    verify_notices(ref, expected_sha, notices_path)
     destination = Path(destination)
     u._new_output(destination, (project, archive))
     with tempfile.TemporaryDirectory(prefix='.trusted-restore-', dir=destination.parent) as tmp:
