@@ -52,6 +52,74 @@
         }
       }
     },
+    "official-research-parent-9519233d": {
+      "entry_kind": "REGISTRATION_ONLY",
+      "expected_reference_sha256": "83df3259b292e3e0323b19fbe1bb5b01afd4f74cfdb8b96f452b1da2468d8724",
+      "reference": {
+        "accepted_package_schema": 2,
+        "authorization": {
+          "automatic_research_approval": false,
+          "experiment_id": "P2-official-master-P4.1-20261118T140923Z-qtma61j8",
+          "production_promotion": "NOT_AUTHORIZED",
+          "research_only": true,
+          "scope": "ISOLATED_RESEARCH_PARENT_REUSE",
+          "type": "EXPLICIT_RESEARCH_BASELINE_REUSE"
+        },
+        "build_fingerprint": "7f66fe80e92d7263d5147d4fea551855184af75829f5b62993eb162acceb0cd8",
+        "corpus_sha256": "280c1577e2821584e72219324513a7e290b53b0022f913f71545a3d40d45fe83",
+        "manifest_sha256": "a248b6bd55004d5fe04a56051a8ed5fb79ba57ea51d1562467ac38969ad26343",
+        "node_id": "sha256-9519233d556d62ae8660d340a8f9792d3058c44ec6d975864f3b1a1619e23767",
+        "notices": {
+          "baseline_id": "sha256-9519233d556d62ae8660d340a8f9792d3058c44ec6d975864f3b1a1619e23767",
+          "parent_transport_sha256": "eccea7dbf5d51f4eff97c45e8fbe781a54ae7c4b6e582999e1a81c4c3a6e9b5c",
+          "schema_version": 1,
+          "sha256": "d05bb4049c5baa7aab766478b4efd9c967319eeb599397ff5e45defbcf73cfdd",
+          "storage": {
+            "asset_id": 764908713,
+            "asset_name": "official-parent-9519233d-license-notices-companion.proposed.zip",
+            "asset_size": 13738,
+            "immutable_required": true,
+            "kind": "GITHUB_PRIVATE_RELEASE_ASSET",
+            "release_id": 450526546,
+            "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
+            "repository_id": 1455203884,
+            "tag": "ci-v2-official-research-parent-9519233d"
+          }
+        },
+        "package_checksum": "c7a23c15cace0f228214b448aafd5241427723f3a9c72283c2bbc39034133823",
+        "package_format": "schema2-research-baseline",
+        "parent_rows_sha256": "eecd520a498e95299ce9a8287bbfc83afa1a2829331ec690eccd559ebfcea6c3",
+        "parent_rows_storage": {
+          "asset_id": 764908636,
+          "asset_name": "official-parent-r2-results.json",
+          "asset_size": 6650350,
+          "immutable_required": true,
+          "kind": "GITHUB_PRIVATE_RELEASE_ASSET",
+          "release_id": 450526546,
+          "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
+          "repository_id": 1455203884,
+          "tag": "ci-v2-official-research-parent-9519233d"
+        },
+        "schema_version": 3,
+        "source_state": "sha256-9013cc571e08106083c47b8c68b93c22c85f0aef427c12fd1443b839c8fbea6e",
+        "storage": {
+          "asset_id": 764908384,
+          "asset_name": "official-research-parent-9519233d.tar.gz",
+          "asset_size": 30846205,
+          "immutable_required": true,
+          "kind": "GITHUB_PRIVATE_RELEASE_ASSET",
+          "release_id": 450526546,
+          "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
+          "repository_id": 1455203884,
+          "tag": "ci-v2-official-research-parent-9519233d"
+        },
+        "transport_sha256": "eccea7dbf5d51f4eff97c45e8fbe781a54ae7c4b6e582999e1a81c4c3a6e9b5c",
+        "upstreams": {
+          "SPHinXsim": "c4a98ca45496c5d617379f7c08d5053d49d6e20b",
+          "SPHinXsys": "64d6069f7469c4171f7807e7e3118a6d7dee06a5"
+        }
+      }
+    },
     "p2-initial-bootstrap": {
       "build_policy_path": "configs/ci_v2_p2_bootstrap_build_policy.json",
       "build_policy_sha256": "9fc2729a4b2881ebd557e797554f5ec6696f877fffbe9b523f270098e2df4fb5",
