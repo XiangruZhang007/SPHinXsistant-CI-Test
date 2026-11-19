@@ -1,0 +1,1 @@
+{"allow_repository_owner":true,"authorized_approver_ids":[],"default_branch":"ci-upstream-refresh","enabled":true,"registry_path":"configs/ci_v2_schema2_trusted_baselines.json","repository":"XiangruZhang007/SPHinXsistant-CI-Test","repository_id":1455203884,"schema_version":1,"workflow_path":".github/workflows/ci_v2_owner_registration.yml"}
