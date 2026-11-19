@@ -326,54 +326,75 @@ def verify(project, baseline_path, registry_path, registry_key, proposed_entry, 
             from .corpus_snapshot import canonical
             registration_subject = _json(canonical(registration_subject))
             subject = registration_subject
-            from .published_candidate_verification import ASSETS, ANCHOR_FIELDS
-            _need(set(subject) == {'schema_version', 'purpose', 'registry_key', 'registry_entry',
-                  'registry_entry_sha256', 'expected_old_registry_sha256', 'approval_policy_sha256',
-                  'candidate_release', 'candidate_release_reference_sha256', 'candidate', 'baseline',
-                  'parent_r2_anchor', 'execution', 'production_promotion'}
-                  and set(subject['candidate_release']) == {'schema_version', 'assets'}
-                  and subject['candidate_release']['schema_version'] == 1
-                  and set(subject['candidate_release']['assets']) == ASSETS
-                  and all(set(item) == {'storage', 'sha256'} and _sha(item['sha256'])
-                          and isinstance(item['storage'], dict)
-                          for item in subject['candidate_release']['assets'].values())
-                  and set(subject['parent_r2_anchor']) == ANCHOR_FIELDS,
-                  'INCOMPLETE_REGISTRATION_SUBJECT')
-            _need(subject.get('schema_version') == 1
-                  and subject.get('purpose') == 'TRUSTED_RESEARCH_PARENT_REGISTRATION'
-                  and subject.get('registry_key') == registry_key
-                  and subject.get('registry_entry') == proposed_entry
-                  and subject.get('registry_entry_sha256') == entry_sha
-                  and subject.get('expected_old_registry_sha256') == current_registry_sha
-                  and subject.get('approval_policy_sha256') == policy_sha256
-                  and subject.get('execution') == 'NO_FRESH_REPLAY'
-                  and subject.get('production_promotion') == 'NOT_AUTHORIZED',
-                  'REGISTRATION_SUBJECT_BINDING_MISMATCH')
-            candidate = subject.get('candidate', {})
-            baseline = subject.get('baseline', {})
-            _need(set(candidate) == {'candidate_id', 'corpus_sha256', 'source_state', 'generation',
-                  'upstreams', 'parent_id', 'build_fingerprint', 'benchmark_sha256',
-                  'quality_status', 'q1_status'}
-                  and set(baseline) == {'baseline_id', 'reference_sha256', 'p4_1_verification', 'q1_status'},
-                  'INCOMPLETE_REGISTRATION_SUBJECT')
-            _need(candidate.get('candidate_id') == candidate_id
-                  and candidate.get('corpus_sha256') == reference['corpus_sha256']
-                  and candidate.get('upstreams') == reference['upstreams']
-                  and candidate.get('source_state') == reference['source_state']
-                  and candidate.get('build_fingerprint') == reference['build_fingerprint']
-                  and candidate.get('generation') == preflight['generation']
-                  and candidate.get('quality_status') == preflight['quality_status']
-                  and baseline.get('baseline_id') == baseline_id
-                  and baseline.get('reference_sha256') == expected_reference_sha256
-                  and baseline.get('p4_1_verification') == 'P4_1_VERIFIED'
-                  and baseline.get('q1_status') == q1_status,
-                  'REGISTRATION_SUBJECT_IDENTITY_MISMATCH')
-            _need(digest(subject['candidate_release']) == subject.get('candidate_release_reference_sha256')
-                  and subject['parent_r2_anchor']['candidate_id'] == candidate_id
-                  and subject['parent_r2_anchor']['baseline_id'] == baseline_id
-                  and (q1_status == 'NOT_RECORDED_IN_EXISTING_BASELINE_QUALITY_SCHEMA'
-                       or candidate.get('q1_status') == q1_status),
-                  'REGISTRATION_SUBJECT_EVIDENCE_MISMATCH')
+            if type(subject.get('schema_version')) is int and subject['schema_version'] == 2:
+                from . import local_registration_subject as local_subject
+                local_subject.validate(subject)
+                _need(context.get('registration_subject_version') == 2,
+                      'LOCAL_SUBJECT_TRUSTED_DEPLOYMENT_REQUIRED')
+                _need(subject['registry_key'] == registry_key and subject['registry_entry'] == proposed_entry
+                      and subject['expected_old_registry_sha256'] == current_registry_sha
+                      and subject['approval_policy_sha256'] == policy_sha256
+                      and subject['trust_domain'] == {k: policy[k] for k in local_subject.DOMAIN},
+                      'REGISTRATION_SUBJECT_BINDING_MISMATCH')
+                _need(subject['candidate']['candidate_id'] == candidate_id
+                      and subject['candidate']['generation'] == preflight['generation']
+                      and subject['candidate']['quality_status'] == preflight['quality_status']
+                      and subject['baseline']['q1_status'] == q1_status
+                      and subject['baseline']['reference_sha256'] == expected_reference_sha256,
+                      'REGISTRATION_SUBJECT_IDENTITY_MISMATCH')
+                _need(client.json('repos/' + policy['repository']).get('private') is True,
+                      'PRIVATE_REGISTRATION_REPOSITORY_REQUIRED')
+            else:
+                _need(context.get('registration_subject_version',1) == 1,
+                      'OWNER_SUBJECT_VERSION_MISMATCH')
+                from .published_candidate_verification import ASSETS, ANCHOR_FIELDS
+                _need(set(subject) == {'schema_version', 'purpose', 'registry_key', 'registry_entry',
+                      'registry_entry_sha256', 'expected_old_registry_sha256', 'approval_policy_sha256',
+                      'candidate_release', 'candidate_release_reference_sha256', 'candidate', 'baseline',
+                      'parent_r2_anchor', 'execution', 'production_promotion'}
+                      and set(subject['candidate_release']) == {'schema_version', 'assets'}
+                      and subject['candidate_release']['schema_version'] == 1
+                      and set(subject['candidate_release']['assets']) == ASSETS
+                      and all(set(item) == {'storage', 'sha256'} and _sha(item['sha256'])
+                              and isinstance(item['storage'], dict)
+                              for item in subject['candidate_release']['assets'].values())
+                      and set(subject['parent_r2_anchor']) == ANCHOR_FIELDS,
+                      'INCOMPLETE_REGISTRATION_SUBJECT')
+                _need(subject.get('schema_version') == 1
+                      and subject.get('purpose') == 'TRUSTED_RESEARCH_PARENT_REGISTRATION'
+                      and subject.get('registry_key') == registry_key
+                      and subject.get('registry_entry') == proposed_entry
+                      and subject.get('registry_entry_sha256') == entry_sha
+                      and subject.get('expected_old_registry_sha256') == current_registry_sha
+                      and subject.get('approval_policy_sha256') == policy_sha256
+                      and subject.get('execution') == 'NO_FRESH_REPLAY'
+                      and subject.get('production_promotion') == 'NOT_AUTHORIZED',
+                      'REGISTRATION_SUBJECT_BINDING_MISMATCH')
+                candidate = subject.get('candidate', {})
+                baseline = subject.get('baseline', {})
+                _need(set(candidate) == {'candidate_id', 'corpus_sha256', 'source_state', 'generation',
+                      'upstreams', 'parent_id', 'build_fingerprint', 'benchmark_sha256',
+                      'quality_status', 'q1_status'}
+                      and set(baseline) == {'baseline_id', 'reference_sha256', 'p4_1_verification', 'q1_status'},
+                      'INCOMPLETE_REGISTRATION_SUBJECT')
+                _need(candidate.get('candidate_id') == candidate_id
+                      and candidate.get('corpus_sha256') == reference['corpus_sha256']
+                      and candidate.get('upstreams') == reference['upstreams']
+                      and candidate.get('source_state') == reference['source_state']
+                      and candidate.get('build_fingerprint') == reference['build_fingerprint']
+                      and candidate.get('generation') == preflight['generation']
+                      and candidate.get('quality_status') == preflight['quality_status']
+                      and baseline.get('baseline_id') == baseline_id
+                      and baseline.get('reference_sha256') == expected_reference_sha256
+                      and baseline.get('p4_1_verification') == 'P4_1_VERIFIED'
+                      and baseline.get('q1_status') == q1_status,
+                      'REGISTRATION_SUBJECT_IDENTITY_MISMATCH')
+                _need(digest(subject['candidate_release']) == subject.get('candidate_release_reference_sha256')
+                      and subject['parent_r2_anchor']['candidate_id'] == candidate_id
+                      and subject['parent_r2_anchor']['baseline_id'] == baseline_id
+                      and (q1_status == 'NOT_RECORDED_IN_EXISTING_BASELINE_QUALITY_SCHEMA'
+                           or candidate.get('q1_status') == q1_status),
+                      'REGISTRATION_SUBJECT_EVIDENCE_MISMATCH')
             expected_dispatch['registration_subject_sha256'] = digest(subject)
         _need(set(dispatch_inputs) == set(expected_dispatch)
               and all(dispatch_inputs.get(key) == value
@@ -408,6 +429,8 @@ def verify(project, baseline_path, registry_path, registry_key, proposed_entry, 
         }
         if registration_subject is not None:
             payload['registration_subject_sha256'] = digest(registration_subject)
+            if registration_subject['schema_version'] == 2:
+                payload['schema_version'] = 2
         _need(payload['review_subject']['corpus_sha256'] == preflight['bindings']['corpus_sha256']
               and payload['review_subject']['source_revisions'] == preflight['bindings']['upstreams'],
               'APPROVAL_SUBJECT_BINDING_MISMATCH')

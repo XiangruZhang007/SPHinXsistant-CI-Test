@@ -1,5 +1,6 @@
 """Isolated transaction tests. All successful authority is explicitly simulated."""
 from copy import deepcopy
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -405,13 +406,142 @@ class RegistrationTransactionTests(unittest.TestCase):
         prepared.write_bytes(original)
         completed = self.isolation / (tid + '.completed.json')
         completed.write_bytes(b'{}\n')
-        self.assertEqual(self.recover(tid)['status'], 'BLOCKED')
+        before = self.copy.read_bytes()
+        recovered = self.recover(tid)
+        self.assertEqual(recovered['status'], 'COMMITTED_WITH_ERROR')
+        self.assertTrue(recovered['registry_committed'])
+        self.assertEqual(recovered['reason'], 'CORRUPT_COMPLETION_RECORD')
+        self.assertEqual(self.copy.read_bytes(), before)
+        self.assertEqual(completed.read_bytes(), b'{}\n')
 
     def test_audit_publication_failure_before_commit_preserves_registry(self):
         with patch.object(tx, '_write_once', side_effect=OSError('cannot write prepared')):
             result = self.run_registration()
         self.assertEqual(result['status'], 'BLOCKED')
         self.assertEqual(self.copy.read_bytes(), self.fixture.client.registry_raw)
+
+
+class RecoveryDecisionMatrixTests(unittest.TestCase):
+    """Same recovery decisions for legacy v1 and local-origin v2 journals."""
+
+    @contextmanager
+    def case(self, version):
+        if version == 1:
+            fixture = RegistrationTransactionTests()
+        else:
+            from test_local_registration_integration import LocalRegistrationTests
+            fixture = LocalRegistrationTests()
+        fixture.setUp()
+        try:
+            register = fixture.run_registration if version == 1 else fixture.register
+            old = fixture.copy.read_bytes()
+            result = register()
+            self.assertEqual(result['status'], 'COMPLETED', result)
+            tid = result['transaction_id']
+            prepared = json.loads((fixture.isolation / (tid + '.prepared.json')).read_bytes())
+            self.assertEqual(prepared['schema_version'], version)
+            yield fixture, tid, old
+        finally:
+            try:
+                fixture.tearDown()
+            finally:
+                fixture.doCleanups()
+
+    def recover_without_authority_or_registry_write(self, fixture, tid):
+        before = fixture.copy.read_bytes()
+        with patch.object(tx.os, 'replace', side_effect=AssertionError('No Registry rewrite')), \
+                patch.object(tx.owner, 'verify', side_effect=AssertionError('No reauthorization')), \
+                patch.object(tx.transport, 'download', side_effect=AssertionError('No remote access')), \
+                patch.object(tx.local_subject, 'prepare', side_effect=AssertionError('No new Subject')):
+            result = fixture.recover(tid)
+        self.assertEqual(fixture.copy.read_bytes(), before)
+        self.assertFalse(result['registry_modified'])
+        return result
+
+    def test_corrupt_completion_preserves_established_commit(self):
+        for version in (1, 2):
+            with self.subTest(version=version), self.case(version) as (f, tid, _):
+                completed = f.isolation / (tid + '.completed.json')
+                damaged = b'{"corrupted":true}'
+                completed.write_bytes(damaged)
+                result = self.recover_without_authority_or_registry_write(f, tid)
+                self.assertEqual(result['status'], 'COMMITTED_WITH_ERROR')
+                self.assertTrue(result['registry_committed'])
+                self.assertEqual(result['reason'], 'CORRUPT_COMPLETION_RECORD')
+                self.assertEqual(completed.read_bytes(), damaged)
+
+    def test_missing_completion_only_completes_audit(self):
+        for version in (1, 2):
+            with self.subTest(version=version), self.case(version) as (f, tid, _):
+                completed = f.isolation / (tid + '.completed.json')
+                expected = completed.read_bytes()
+                completed.unlink()
+                result = self.recover_without_authority_or_registry_write(f, tid)
+                self.assertEqual(result['status'], 'COMPLETED')
+                self.assertTrue(result['registry_committed'])
+                self.assertEqual(completed.read_bytes(), expected)
+
+    def test_valid_completion_is_idempotent(self):
+        for version in (1, 2):
+            with self.subTest(version=version), self.case(version) as (f, tid, _):
+                completed = f.isolation / (tid + '.completed.json')
+                stamp = completed.stat().st_mtime_ns
+                first = self.recover_without_authority_or_registry_write(f, tid)
+                self.assertEqual(first['status'], 'COMPLETED')
+                self.assertTrue(first['registry_committed'])
+                self.assertEqual(self.recover_without_authority_or_registry_write(f, tid), first)
+                self.assertEqual(completed.stat().st_mtime_ns, stamp)
+
+    def test_old_bytes_without_completion_not_committed(self):
+        for version in (1, 2):
+            with self.subTest(version=version), self.case(version) as (f, tid, old):
+                (f.isolation / (tid + '.completed.json')).unlink()
+                f.copy.write_bytes(old)
+                result = self.recover_without_authority_or_registry_write(f, tid)
+                self.assertEqual(result['status'], 'NOT_COMMITTED')
+                self.assertFalse(result['registry_committed'])
+
+    def test_old_bytes_with_any_completion_fail_closed(self):
+        for version in (1, 2):
+            with self.subTest(version=version), self.case(version) as (f, tid, old):
+                completed = f.isolation / (tid + '.completed.json')
+                for raw in (completed.read_bytes(), b'corrupt'):
+                    completed.write_bytes(raw)
+                    f.copy.write_bytes(old)
+                    result = self.recover_without_authority_or_registry_write(f, tid)
+                    self.assertEqual(result['status'], 'BLOCKED')
+                    self.assertFalse(result['registry_committed'])
+                    self.assertEqual(result['reason'], 'COMPLETED_RECORD_WITH_OLD_REGISTRY')
+                    self.assertEqual(completed.read_bytes(), raw)
+
+    def test_unexpected_bytes_take_precedence_over_completion_damage(self):
+        for version in (1, 2):
+            with self.subTest(version=version), self.case(version) as (f, tid, _):
+                (f.isolation / (tid + '.completed.json')).write_bytes(b'corrupt')
+                f.copy.write_bytes(b'unexpected Registry bytes')
+                result = self.recover_without_authority_or_registry_write(f, tid)
+                self.assertEqual(result['status'], 'CONFLICT')
+                self.assertFalse(result['registry_committed'])
+
+    def test_invalid_prepared_cannot_establish_new_state(self):
+        for version in (1, 2):
+            with self.subTest(version=version), self.case(version) as (f, tid, _):
+                prepared = f.isolation / (tid + '.prepared.json')
+                prepared.write_bytes(b'{}')
+                result = self.recover_without_authority_or_registry_write(f, tid)
+                self.assertEqual(result['status'], 'BLOCKED')
+                self.assertFalse(result['registry_committed'])
+
+    def test_completion_write_failure_retains_commit(self):
+        for version in (1, 2):
+            with self.subTest(version=version), self.case(version) as (f, tid, _):
+                completed = f.isolation / (tid + '.completed.json')
+                completed.unlink()
+                with patch.object(tx, '_complete', side_effect=OSError('Injected audit failure')):
+                    result = self.recover_without_authority_or_registry_write(f, tid)
+                self.assertEqual(result['status'], 'COMMITTED_WITH_ERROR')
+                self.assertTrue(result['registry_committed'])
+                self.assertFalse(completed.exists())
 
 
 class UnconfiguredExecutionTests(unittest.TestCase):

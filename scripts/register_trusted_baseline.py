@@ -17,6 +17,8 @@ sys.path.insert(0, str(PROJECT))
 from src import published_candidate_verification as evidence
 from src import baseline_registration_transaction as transaction
 from src import owner_manual_baseline_approval as owner
+from src import local_candidate_verification as local_verification
+from src import local_registration_subject as local_subject
 from src.corpus_snapshot import digest
 
 PINS = {'expected_candidate_release_sha256', 'expected_reference_sha256',
@@ -26,8 +28,7 @@ REQUEST_FIELDS = PINS | {'schema_version', 'registry_key', 'proposed_entry',
 REGISTRATION_REQUEST_FIELDS = REQUEST_FIELDS - {'expected_build_policy_sha256'}
 LOCAL_REQUEST_FIELDS = (REGISTRATION_REQUEST_FIELDS - {
     'candidate_release', 'expected_candidate_release_sha256'}) | {'local_evidence'}
-LOCAL_EVIDENCE_FIELDS = {'evidence_origin', 'hosted_validation', 'candidate_id',
-    'baseline_id', 'corpus_sha256', 'descriptor_sha256', 'archive_sha256'}
+LOCAL_EVIDENCE_FIELDS = local_verification.LOCAL_FIELDS
 STORAGE_FIELDS = {'kind', 'repository', 'repository_id', 'release_id', 'asset_id',
                   'tag', 'asset_name', 'asset_size', 'immutable_required'}
 REFERENCE_FIELDS = {'schema_version', 'package_format', 'accepted_package_schema', 'node_id',
@@ -165,13 +166,19 @@ def load_request(path, expected_sha):
             and policy['repository_id'] == ref['storage']['repository_id'], 'POLICY_REPOSITORY_MISMATCH')
     require(policy['registry_path'] == 'configs/ci_v2_schema2_trusted_baselines.json',
             'AUTHORITATIVE_REGISTRY_PATH_MISMATCH')
+    if local:
+        # Policy bytes are independently pinned in the externally pinned request.
+        # Reading this domain is not verifying an Owner approval decision.
+        local_verification.validate_transport(request['local_evidence'], ref,
+            request['expected_reference_sha256'], expected_repository=policy['repository'],
+            expected_repository_id=policy['repository_id'])
     return request, policy_path
 
 
 def _parser():
     parser = Parser(description=__doc__, allow_abbrev=False)
     commands = parser.add_subparsers(dest='command', required=True, parser_class=Parser)
-    for command in ('verify-subject', 'register'):
+    for command in ('verify-subject', 'verify-local-evidence', 'verify-local-subject', 'register'):
         sub = commands.add_parser(command, allow_abbrev=False)
         sub.add_argument('--request', type=Path, required=True)
         sub.add_argument('--request-sha256', required=True)
@@ -189,9 +196,32 @@ def _invoke(args):
         return transaction.recover(PROJECT, args.isolation_directory,
                                    transaction_id=args.transaction_id)
     request, policy = load_request(args.request, args.request_sha256)
-    # Schema 3 is parsing-only until bounded transport and Owner Subject v2 are
-    # reviewed. Never turn parsing success into L1 verification or authorization.
+    if args.command == 'verify-local-subject':
+        require(request['schema_version'] == 3, 'LOCAL_REQUEST_REQUIRED')
+        token = next((os.environ[k] for k in ('TRUSTED_RELEASE_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
+                      if os.environ.get(k)), None)
+        verified = local_subject.prepare(PROJECT, PROJECT/'configs/ci_v2_schema2_trusted_baselines.json',
+                                         args.request,args.request_sha256,token=token)
+        return {k:verified[k] for k in ('status','execution','registration_subject',
+            'registration_subject_sha256','retained_directory')} | {
+                'owner_authorization':'NOT_GRANTED','registration':'NOT_PERFORMED'}
+    if args.command == 'verify-local-evidence':
+        require(request['schema_version'] == 3, 'LOCAL_REQUEST_REQUIRED')
+        trusted_policy = owner._policy(PROJECT, policy, request['approval_policy_sha256'])
+        token = next((os.environ[k] for k in ('TRUSTED_RELEASE_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
+                      if os.environ.get(k)), None)
+        return local_verification.verify(PROJECT, request['local_evidence'],
+            request['proposed_entry']['reference'], request['expected_reference_sha256'],
+            expected_repository=trusted_policy['repository'],
+            expected_repository_id=trusted_policy['repository_id'], token=token)
+    # Only the separate evidence-only operation can route Schema 3 into L1.
+    # Subject/registration remain blocked until Owner Subject v2 is reviewed.
     if request['schema_version'] == 3:
+        if args.command == 'register':
+            token = next((os.environ[k] for k in ('TRUSTED_RELEASE_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
+                          if os.environ.get(k)), None)
+            return transaction.register_local(PROJECT,args.isolation_directory,
+                request_path=args.request,expected_request_sha256=args.request_sha256,token=token)
         raise InputError('LOCAL_EVIDENCE_TRANSPORT_CONTRACT_NOT_FINALIZED')
     if request['proposed_entry']['reference']['schema_version'] == 3:
         raise InputError('REFERENCE_V3_REGISTRATION_INTEGRATION_PENDING')
@@ -232,11 +262,13 @@ def main(argv=None):
             result = {**result, 'reason': 'OPERATION_FAILED'}
         status = result.get('status')
         code = (2 if status == 'COMMITTED_WITH_ERROR' else
-                0 if status in ('EVIDENCE_VERIFIED', 'COMPLETED') else 1)
+                0 if status in ('EVIDENCE_VERIFIED', 'LOCAL_REMOTE_EVIDENCE_VERIFIED', 'COMPLETED') else 1)
     except Exception as error:
         reason = str(error) if isinstance(error, (InputError, evidence.VerificationError,
                                                 owner.OwnerApprovalError,
-                                                evidence.registration.RegistrationError)) else ''
+                                                evidence.registration.RegistrationError,
+                                                local_verification.VerificationError,
+                                                local_subject.SubjectError)) else ''
         if not re.fullmatch(r'[A-Z][A-Z0-9_]{0,100}', reason):
             reason = 'INVALID_INPUT_OR_OPERATION_FAILED'
         result = {'status': 'BLOCKED', 'registration': 'NOT_PERFORMED',

@@ -1,8 +1,13 @@
 # Local registration request preparation (L2-A)
 
-This stage adds a **parsing-only** request Schema 3. It cannot generate an Owner
-subject, verify published local evidence, register a Baseline, or write any
-Registry. Existing Hosted request schemas 1/2 retain their closed input contracts
+L2-A originally added a **parsing-only** request Schema 3. L2-B2a now adds the
+separate evidence-only route documented in [local_candidate_verification.md](local_candidate_verification.md).
+Ordinary registration remains blocked. L2-B2b now supports a separately verified
+unsigned Owner Subject v2 and trusted Hosted isolated route; see
+[local_registration_subject.md](local_registration_subject.md). No actual
+registration or authoritative Registry writing is authorized here. Published
+local evidence is verified only by the separate evidence-only command.
+Existing Hosted request schemas 1/2 retain their closed input contracts
 and verification path. A failed Hosted verification never falls back to L1.
 
 Schema 3 has exactly these top-level fields:
@@ -15,7 +20,8 @@ Schema 3 has exactly these top-level fields:
   configuration rules. Loading the policy does not verify an Owner decision.
 - `local_evidence`: exactly `evidence_origin: LOCAL_RESEARCH_EXECUTION`,
   `hosted_validation: HOSTED_NOT_RUN`, `candidate_id`, `baseline_id`,
-  `corpus_sha256`, `descriptor_sha256`, `archive_sha256`.
+  `corpus_sha256`, `descriptor_sha256`, `archive_sha256`, plus the L2-T
+  `transport` and independently canonical-pinned `transport_sha256`.
 
 The local identity must agree with the proposed Reference's Baseline and corpus,
 and its Candidate ID when present. IDs use existing `sha256-…` syntax; all pins
@@ -32,10 +38,10 @@ Schemas 1/2 forbid `local_evidence` and other new local-only fields. There is no
 automatic origin inference or exception fallback.
 
 The CLI uses the existing `--request` and `--request-sha256` inputs. After
-successful Schema 3 parsing, both `verify-subject` and `register` return exit 1,
-`BLOCKED / LOCAL_EVIDENCE_TRANSPORT_CONTRACT_NOT_FINALIZED`, before calling L1,
-Hosted verification or any transaction. The Hosted composition likewise rejects
-Schema 3 in `_inputs()` before Owner context and isolated Registry creation.
+successful Schema 3 parsing, legacy `verify-subject` remains blocked. Ordinary
+`register` now reaches the still-denying trusted execution context; it cannot
+authorize itself. Only separately pinned Deployment v2 can compose the new
+Subject v2/isolated transaction. Deployment v1 continues rejecting Schema 3.
 
 Reference v3 metadata is accepted only with its exact supported `notices`
 binding. Existing `trusted_snapshot.validate_reference(remote=True)` checks the
@@ -47,9 +53,11 @@ retention and notices-aware registration restoration, executing a Hosted request
 with Reference v3 returns `REFERENCE_V3_REGISTRATION_INTEGRATION_PENDING` before
 the backend. The existing public restore gate remains unchanged.
 
-Remaining dependencies: reviewed bounded local archive layout and manifest,
-publication provenance and genuine remote asset reference/pin contract, verified
-downloads routed into L1, Owner Subject v2, and transaction notices integration.
+L2-B2a's separate `verify-local-evidence` can validate pinned published local
+transport and restore Reference v3 with mandatory notices, without constructing
+a registration subject. Old seven-field drafts are rejected. Remaining real
+dependencies include actual publication/remote acceptance, expanded hosting
+confirmation and genuine Hosted Owner/transaction acceptance.
 No local filesystem paths or invented remote locators are accepted as substitutes
 for that unfinished transport contract. Authoritative Registry application is
 still a separate boundary; this stage does not enable it or future construction.

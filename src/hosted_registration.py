@@ -40,8 +40,11 @@ def _deployment():
           'HOSTED_DEPLOYMENT_NOT_CONFIGURED')
     _need(tx._sha(raw.encode('utf-8')) == sha, 'HOSTED_DEPLOYMENT_PIN_MISMATCH')
     deployment = tx.evidence._json(raw)
-    _need(isinstance(deployment, dict) and set(deployment) == DEPLOYMENT_FIELDS
-          and type(deployment['schema_version']) is int and deployment['schema_version'] == 1,
+    version = deployment.get('schema_version') if isinstance(deployment,dict) else None
+    _need(type(version) is int and version in (1,2)
+          and set(deployment) == (DEPLOYMENT_FIELDS if version==1 else DEPLOYMENT_FIELDS|{'registration_subject_version'})
+          and (version==1 or type(deployment['registration_subject_version']) is int
+               and deployment['registration_subject_version']==2),
           'INVALID_HOSTED_DEPLOYMENT')
     _need(isinstance(deployment['repository'], str)
           and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', deployment['repository'])
@@ -75,7 +78,9 @@ def _checkout(deployment):
     # These exact files and the configuration must be in the reviewed commit,
     # not untracked code/config supplied alongside a trusted checkout.
     for name in (*REQUIRED_CODE, deployment['workflow_path'], deployment['request_path'],
-                 deployment['approval_policy_path']):
+                 deployment['approval_policy_path'], *(('src/local_registration_subject.py',
+                 'src/local_candidate_verification.py','src/local_candidate_transport.py',
+                 'src/local_candidate_evidence.py') if deployment.get('schema_version',1)==2 else ())):
         _git('ls-files', '--error-unmatch', '--', name)
         path = PROJECT / name
         _need(path.is_file() and not path.is_symlink()
@@ -87,9 +92,14 @@ def _inputs(deployment):
     policy_path = cli.config_file(deployment['approval_policy_path'], policy=True)
     request, checked_policy = cli.load_request(request_path, deployment['request_sha256'])
     # L2-A adds parsing, not a new Hosted authority/transaction path.
-    _need(request['schema_version'] in (1, 2), 'LOCAL_EVIDENCE_TRANSPORT_CONTRACT_NOT_FINALIZED')
-    _need(request['proposed_entry']['reference']['schema_version'] != 3,
-          'REFERENCE_V3_REGISTRATION_INTEGRATION_PENDING')
+    if deployment.get('schema_version',1)==1:
+        _need(request['schema_version'] in (1, 2), 'LOCAL_EVIDENCE_TRANSPORT_CONTRACT_NOT_FINALIZED')
+        _need(request['proposed_entry']['reference']['schema_version'] != 3,
+              'REFERENCE_V3_REGISTRATION_INTEGRATION_PENDING')
+    else:
+        _need(deployment['registration_subject_version']==2 and request['schema_version']==3
+              and request['proposed_entry']['reference']['schema_version']==3,
+              'HOSTED_SUBJECT_VERSION_MISMATCH')
     _need(checked_policy == policy_path
           and request['approval_policy_sha256'] == deployment['approval_policy_sha256'],
           'HOSTED_REQUEST_POLICY_BINDING_MISMATCH')
@@ -129,6 +139,8 @@ def _context(deployment, request, policy):
     # not accepted merely from the runtime strings above.
     actor = owner._github_identity(owner.GitHubCLI(), policy, context)
     _need(actor['commit_sha'] == deployment['implementation_revision'], 'HOSTED_API_COMMIT_MISMATCH')
+    if deployment['schema_version']==2:
+        context['registration_subject_version']=2
     return context
 
 
@@ -204,8 +216,11 @@ def run():
             _need(_context(deployment, request, policy) == context, 'HOSTED_EXECUTION_CHANGED')
             return context
         values = {k: request[k] for k in cli.PINS if k in request}
-        values.update(registry_key=request['registry_key'], proposed_entry=request['proposed_entry'],
-                      candidate_release=request['candidate_release'], approval_policy_path=policy_path)
+        if request['schema_version']==3:
+            values=tx._local_arguments(PROJECT,PROJECT/deployment['request_path'],deployment['request_sha256'])
+        else:
+            values.update(registry_key=request['registry_key'], proposed_entry=request['proposed_entry'],
+                          candidate_release=request['candidate_release'], approval_policy_path=policy_path)
         token = next((os.environ[k] for k in ('TRUSTED_RELEASE_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
                       if os.environ.get(k)), None)
         result = tx._register(PROJECT, isolated, token=token,

@@ -30,6 +30,14 @@ class LocalRegistrationRequestTests(unittest.TestCase):
             hosted_validation='HOSTED_NOT_RUN', candidate_id=self.f.f.upstream_report['candidate_id'],
             baseline_id=ref['node_id'], corpus_sha256=ref['corpus_sha256'],
             descriptor_sha256='a' * 64, archive_sha256='b' * 64)
+        self.use_v3()
+        storage = dict(ref['storage'], release_id=9000, asset_id=9001,
+                       asset_name='synthetic-local-evidence.tar.gz', asset_size=123)
+        transport = dict(schema_version=1, kind='LOCAL_RESEARCH_EVIDENCE_TRANSPORT',
+            **r['local_evidence'], parent_id='sha256-' + 'd' * 64,
+            reference_sha256=r['expected_reference_sha256'], manifest_sha256='c' * 64,
+            archive_size=123, publication_commit='d' * 40, storage=storage)
+        r['local_evidence'].update(transport=transport, transport_sha256=digest(transport))
         self.f.write_request()
 
     def pin_reference(self):
@@ -64,7 +72,8 @@ class LocalRegistrationRequestTests(unittest.TestCase):
             for command in ('verify-subject', 'register'):
                 code, result = self.f.call(command)
                 self.assertEqual(code, 1)
-                self.assertEqual(result['reason'], 'LOCAL_EVIDENCE_TRANSPORT_CONTRACT_NOT_FINALIZED')
+                self.assertEqual(result['reason'], 'TRUSTED_WORKFLOW_EXECUTION_NOT_ESTABLISHED'
+                    if command == 'register' else 'LOCAL_EVIDENCE_TRANSPORT_CONTRACT_NOT_FINALIZED')
                 self.assertEqual(result['registration'], 'NOT_PERFORMED')
         l1.assert_not_called()
         original.assert_not_called()

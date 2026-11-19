@@ -166,12 +166,18 @@ def verify(project, registry_path, registry_key, proposed_entry, *,
             manifest, evidence = _candidate(candidate_release,
                 expected_candidate_release_sha256, work, token)
             phase = 'BASELINE_VERIFICATION_FAILED'
-            transport.download(ref['storage'], work / 'baseline.tar.gz',
-                               ref['transport_sha256'], token=token)
-            transport.restore(project, work / 'baseline.tar.gz', work / 'baseline',
-                              ref, expected_reference_sha256)
-            transport.download(ref['parent_rows_storage'], work / 'parent-r2.json',
-                               ref['parent_rows_sha256'], token=token)
+            if ref['schema_version'] == 3:
+                from .local_candidate_verification import restore_delivery
+                restore_delivery(project, ref, expected_reference_sha256, work,
+                                 token=token, stem='baseline')
+                shutil.copyfile(work / 'baseline-r2.json', work / 'parent-r2.json')
+            else:
+                transport.download(ref['storage'], work / 'baseline.tar.gz',
+                                   ref['transport_sha256'], token=token)
+                transport.restore(project, work / 'baseline.tar.gz', work / 'baseline',
+                                  ref, expected_reference_sha256)
+                transport.download(ref['parent_rows_storage'], work / 'parent-r2.json',
+                                   ref['parent_rows_sha256'], token=token)
             preflight = registration.prepare(project, registry_path, registry_key,
                 work / 'baseline', proposed_entry,
                 expected_reference_sha256=expected_reference_sha256,
