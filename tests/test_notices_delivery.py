@@ -251,13 +251,31 @@ class NoticesDeliveryTests(unittest.TestCase):
         with self.assertRaises(c.GateError): t.verify_retained_notices(self.ref, digest(self.ref), self.root)
 
     def test_historical_public_and_private_references_unchanged(self):
-        for entry in read_json(t.REGISTRY)['baselines'].values():
+        for key, entry in read_json(t.REGISTRY)['baselines'].items():
             ref = entry['reference']
-            with self.subTest(format=ref['package_format']), patch.object(t, 'download') as download:
+            with self.subTest(key=key, schema=ref['schema_version'], format=ref['package_format']), patch.object(t, 'download') as download:
                 self.assertEqual(t.validate_reference(ref, entry['expected_reference_sha256']), ref)
-                self.assertIsNone(t.fetch_notices(ref, entry['expected_reference_sha256'], self.root / 'unused'))
-                self.assertIsNone(t.verify_notices(ref, entry['expected_reference_sha256'], None))
-                download.assert_not_called()
+                if ref['schema_version'] == 2:
+                    self.assertNotIn('notices', ref)
+                    self.assertIsNone(t.fetch_notices(ref, entry['expected_reference_sha256'], self.root / 'unused'))
+                    self.assertIsNone(t.verify_notices(ref, entry['expected_reference_sha256'], None))
+                    download.assert_not_called()
+                elif ref['schema_version'] == 3:
+                    with self.assertRaises(c.GateError) as missing:
+                        t.verify_notices(ref, entry['expected_reference_sha256'], None)
+                    self.assertEqual(missing.exception.status, 'NOTICES_REQUIRED')
+                    download.assert_not_called()
+                    # A mocked transfer creates no bytes: v3 must still verify
+                    # the mandatory attachment, rather than falling back to v2.
+                    destination = self.root / 'unused'
+                    with self.assertRaises(c.GateError) as missing_download:
+                        t.fetch_notices(ref, entry['expected_reference_sha256'], destination)
+                    self.assertEqual(missing_download.exception.status, 'NOTICES_REQUIRED')
+                    download.assert_called_once_with(ref['notices']['storage'], destination,
+                        ref['notices']['sha256'], token=os.environ.get('TRUSTED_RELEASE_TOKEN'))
+                    self.assertFalse(destination.exists())
+                else:
+                    self.fail('Unsupported reference schema in reviewed Registry')
 
     def test_schema2_cannot_silently_claim_notices_via_unknown_field(self):
         self.ref['schema_version'] = 2
