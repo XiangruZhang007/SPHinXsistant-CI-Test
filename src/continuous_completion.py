@@ -70,8 +70,8 @@ def origin(client, config, run_id, attempt):
     need(type(run_id) is int and run_id > 0 and type(attempt) is int and attempt == 1, 'INVALID_BUILD_ATTEMPT')
     base = '/repos/' + config['repository']
     repo = client._api('GET', base)
-    need(repo.get('id') == config['repository_id'] and repo.get('full_name') == config['repository']
-         and repo.get('private') is True, 'COMPLETION_REPOSITORY_MISMATCH')
+    need(trust.repository_identity(repo, config['repository'], config['repository_id']),
+         'COMPLETION_REPOSITORY_MISMATCH')
     run = client._api('GET', base + f'/actions/runs/{run_id}/attempts/{attempt}')
     need(run.get('id') == run_id and run.get('run_attempt') == attempt
          and run.get('event') in ('schedule', 'workflow_dispatch')

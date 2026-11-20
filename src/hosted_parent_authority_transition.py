@@ -17,6 +17,7 @@ from . import parent_authority_transition as transition
 from . import owner_manual_baseline_approval as owner
 from .corpus_snapshot import checked_file, digest, file_digest
 from .ci_v2_research import frozen_runtime
+from .trusted_snapshot import repository_identity
 
 PROJECT = Path(__file__).resolve().parents[1]
 WORKFLOW = '.github/workflows/ci_v2_parent_authority_transition.yml'
@@ -135,8 +136,7 @@ def _observe(project, config):
          'TRANSITION_OWNER_ONLY_POLICY_REQUIRED')
     client = owner.GitHubCLI()
     repo = owner._api(client, 'repos/' + r['repository'])
-    need(repo.get('private') is True and repo.get('id') == r['repository_id']
-         and repo.get('full_name') == r['repository']
+    need(repository_identity(repo, r['repository'], r['repository_id'])
          and repo.get('owner', {}).get('type') == 'User', 'TRANSITION_PRIVATE_OWNER_REPOSITORY_REQUIRED')
     actor = owner._github_identity(client, policy, context)
     need(actor['actor_id'] == repo['owner']['id'] and actor['workflow_id'] == config['workflow_id']

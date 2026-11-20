@@ -25,13 +25,13 @@ REAL_VALIDATE = v.trusted.validate_reference
 
 
 class RemoteLocalEvidenceTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self, repository='SyntheticOwner/LocalEvidence', repository_id=777):
         self.t = fixtures.LocalTransportTests(); self.t.setUp()
         self.addCleanup(self.t.doCleanups)
         self.f = self.t.f
         self.project = self.t.root / 'project'; self.project.mkdir()
         self.registry = self.project / 'registry.json'; self.registry.write_bytes(b'unchanged')
-        self.repository = 'SyntheticOwner/LocalEvidence'; self.repository_id = 777
+        self.repository = repository; self.repository_id = repository_id
         self.token = 'synthetic-secret-do-not-print'
         env = patch.dict(os.environ, GITHUB_REPOSITORY=self.repository,
                          GITHUB_REPOSITORY_ID=str(self.repository_id))

@@ -508,11 +508,13 @@ class GenuineFormatTests(unittest.TestCase):
     def test_quality_and_old_contracts_preserved(self):
         for key, value in run.LIMITS.items(): self.assertEqual(self.result[key], value)
         self.assertEqual(digest(source.contract(P)), 'b0b43411aef4d716a15a2f0a794071523fbb3c260dc4cb3fc9b2736eed9e1ac1')
-        # Notice delivery changes transitive implementation bytes. Preserve the
+        # Notice delivery/public-host support changes implementation bytes. Preserve the
         # ORIGINAL pins by reconstructing the original contract, rather than
         # silently repinning sealed historical packages to today's code.
         historical = deepcopy(v1.contract(P))
         historical['implementation'].update({
+            # Original Owner verifier bytes retained in checkpoint a276b709.
+            'src/owner_manual_baseline_approval.py': 'e4640e57aa703732bf91b08da493892cd07e23f46f77e99b555c8c7e867b4051',
             'src/trusted_snapshot.py': '4f3b2c2a2a0555d3e7fd5deb93891d38dbee990339989d5e832761e70053a4fe',
             'src/schema2_workflow.py': '28f063f8cb934c5241044e4babfc17a52dfb53787e2eab8fdaa4b1074c0a856e'})
         self.assertEqual(digest(historical), '2d9c41cc55d5f6c7dd8022280e38b7d1ec8ad5d991d7e452396dfa02e19220e3')

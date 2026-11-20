@@ -2,8 +2,8 @@
 
 The expected reference digest is supplied outside the downloaded package. An
 integrity check is not an authorization and a P2 anchor is not research approval.
-Public P2 transport remains unauthenticated; private same-repository transport
-uses a narrowly scoped workflow token for API requests only.
+Public P2 transport remains unauthenticated; historically private same-repository
+transport remains authenticated even for the exact approved public test host.
 """
 from pathlib import Path
 import os
@@ -28,6 +28,31 @@ FORMATS = {'p2-snapshot-v1': (1, 'EXPLICIT_P2_BOOTSTRAP'),
 DOWNLOAD_IMPLEMENTATION = 'atomic-no-clobber-v2'
 NOTICES_REFERENCE_VERSION = 3
 MAX_NOTICES_BYTES = 16 * 1024**2
+PUBLIC_RESEARCH_REPOSITORY = 'XiangruZhang007/SPHinXsistant-CI-Test'
+PUBLIC_RESEARCH_REPOSITORY_ID = 1455203884
+
+
+def repository_identity(repository, expected_name, expected_id, *, required_visibility=None):
+    """Pinned identity with a single public deployment exception, never authority.
+
+    The optional caller-policy requirement can only narrow permitted visibility.
+    Historical private API fixtures may omit `visibility`; `private` must always
+    be a genuine boolean. No locator/Reference/Owner policy schema is changed.
+    """
+    if not (isinstance(repository, dict) and isinstance(expected_name, str)
+            and type(expected_id) is int and expected_id > 0
+            and type(repository.get('id')) is int and repository['id'] == expected_id
+            and repository.get('full_name') == expected_name
+            and type(repository.get('private')) is bool
+            and required_visibility in (None, 'private', 'public')):
+        return False
+    visibility = 'private' if repository['private'] else 'public'
+    if 'visibility' in repository and repository['visibility'] != visibility:
+        return False
+    if required_visibility is not None and required_visibility != visibility:
+        return False
+    return repository['private'] or (expected_name == PUBLIC_RESEARCH_REPOSITORY
+                                   and expected_id == PUBLIC_RESEARCH_REPOSITORY_ID)
 
 
 def validate_reference(ref, expected_sha, *, remote=False, controlled=False):
@@ -389,13 +414,18 @@ def _request(url, *, binary=False, token=None):
     raise c.GateError('RELEASE_DOWNLOAD_FAILED', 'Too many GitHub asset redirects')
 
 
-def download(storage, destination, expected_sha, *, token=None):
+def download(storage, destination, expected_sha, *, token=None, required_visibility=None):
     """Numeric immutable asset identity + externally pinned bytes, never latest."""
     import json
     destination = Path(destination)
     c.need(not destination.exists() and not destination.is_symlink(), 'INVALID_OUTPUT', 'Download destination must be new')
     base = release_locator(storage)
+    # Historical enum identifies the authenticated pinned transport, not an
+    # authority to change Reference bytes or drop authentication on a public host.
     private = storage['kind'] == PRIVATE_RELEASE_KIND
+    c.need(required_visibility in (None, 'private', 'public')
+        and (private or required_visibility in (None, 'public')),
+        'INVALID_REFERENCE', 'Unsupported transport visibility requirement')
     if private:
         c.need(isinstance(token, str) and token and not any(ch.isspace() for ch in token),
                'AUTHENTICATION_FAILED', 'Private Release download requires workflow token')
@@ -412,9 +442,9 @@ def download(storage, destination, expected_sha, *, token=None):
         return json.loads(raw)
     if private:
         repository = metadata(base)
-        c.need(type(repository.get('id')) is int and repository['id'] == storage['repository_id']
-            and repository.get('full_name') == storage['repository'] and repository.get('private') is True,
-            'INVALID_REFERENCE', 'Private repository identity/visibility mismatch')
+        c.need(repository_identity(repository, storage['repository'], storage['repository_id'],
+                                  required_visibility=required_visibility),
+            'INVALID_REFERENCE', 'Authenticated repository identity/visibility mismatch')
     release = metadata(base + '/releases/' + str(storage['release_id']))
     c.need(type(release.get('id')) is int and release['id'] == storage['release_id']
         and release.get('immutable') is True and release.get('draft') is False

@@ -174,7 +174,8 @@ def _scheduled_identity(client, policy, context):
     need(repository.get('id') == policy['repository_id']
          and repository.get('full_name', '').casefold() == repo.casefold()
          and repository.get('default_branch') == policy['default_branch']
-         and repository.get('private') is True, 'GITHUB_REPOSITORY_IDENTITY_MISMATCH')
+         and trust.repository_identity(repository, repo, policy['repository_id']),
+         'GITHUB_REPOSITORY_IDENTITY_MISMATCH')
     observed = owner._api(client, prefix + '/actions/runs/' + str(context['run_id']), 'GITHUB_WORKFLOW_RUN_UNAVAILABLE')
     need(observed.get('id') == context['run_id'] and observed.get('event') == 'schedule'
          and observed.get('status') == 'in_progress' and type(observed.get('run_attempt')) is int

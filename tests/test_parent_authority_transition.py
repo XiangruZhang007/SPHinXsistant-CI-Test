@@ -22,14 +22,14 @@ P = Path(__file__).resolve().parents[1]
 
 
 class TransitionTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self, repository='FixtureOwner/NoticesTest', repository_id=42):
         self.fixture = notices_fixtures.NoticesDeliveryTests()
-        self.fixture.setUp(); self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp(repository, repository_id); self.addCleanup(self.fixture.doCleanups)
         self.root = self.fixture.root
         (self.root / 'configs').mkdir()
         self.ref = deepcopy(self.fixture.ref)
         scoped_environment = patch.dict(os.environ, {
-            'GITHUB_REPOSITORY': 'FixtureOwner/NoticesTest', 'GITHUB_REPOSITORY_ID': '42'})
+            'GITHUB_REPOSITORY': repository, 'GITHUB_REPOSITORY_ID': str(repository_id)})
         scoped_environment.start(); self.addCleanup(scoped_environment.stop)
         self.entry = {'entry_kind': 'REGISTRATION_ONLY', 'reference': self.ref,
                       'expected_reference_sha256': digest(self.ref)}
@@ -67,7 +67,7 @@ class TransitionTests(unittest.TestCase):
             'automatic_registration': False, **research.RESTRICTIONS}
         self.save('configs/continuous.json', self.scope)
         self.owner = {'schema_version': 1, 'enabled': True,
-            'repository': 'FixtureOwner/NoticesTest', 'repository_id': 42,
+            'repository': repository, 'repository_id': repository_id,
             'default_branch': 'ci-upstream-refresh',
             'workflow_path': '.github/workflows/transition-fixture.yml',
             'registry_path': self.registry_path, 'allow_repository_owner': True,

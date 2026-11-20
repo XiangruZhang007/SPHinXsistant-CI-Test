@@ -28,8 +28,8 @@ class Crash(BaseException):
 
 
 class LocalRegistrationTests(unittest.TestCase):
-    def setUp(self):
-        self.r=fixtures.RemoteLocalEvidenceTests();self.r.setUp();self.addCleanup(self.r.doCleanups)
+    def setUp(self, repository='SyntheticOwner/LocalEvidence', repository_id=777):
+        self.r=fixtures.RemoteLocalEvidenceTests();self.r.setUp(repository, repository_id);self.addCleanup(self.r.doCleanups)
         r=self.r;f=r.f;self.project=r.project
         self.configs=self.project/'configs';self.configs.mkdir()
         self.registry=self.configs/'ci_v2_schema2_trusted_baselines.json'

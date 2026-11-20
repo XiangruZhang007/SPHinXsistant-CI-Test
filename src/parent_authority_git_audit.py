@@ -13,6 +13,7 @@ import secrets
 
 from . import parent_authority_transition as transition
 from .corpus_snapshot import canonical, digest
+from .trusted_snapshot import repository_identity
 
 PROTOCOL = 'PARENT_AUTHORITY_GIT_AUDIT_V1'
 LIMIT = 128 * 1024
@@ -169,9 +170,8 @@ class _IsolatedGitProtocol:
     def _scan(self):
         c = self._config
         repo = self._call('GET')
-        _need(repo.get('full_name') == c['repository']
-              and type(repo.get('id')) is int and repo.get('id') == c['repository_id']
-              and repo.get('private') is True, 'AUDIT_REPOSITORY_IDENTITY_MISMATCH')
+        _need(repository_identity(repo, c['repository'], c['repository_id']),
+              'AUDIT_REPOSITORY_IDENTITY_MISMATCH')
         ref = self._call('GET', '/git/ref/' + c['ref'][5:])
         _need(ref.get('ref') == c['ref'] and isinstance(ref.get('object'), dict)
               and ref['object'].get('type') == 'commit',

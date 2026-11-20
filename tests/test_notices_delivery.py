@@ -25,7 +25,8 @@ def sha(data):
 
 
 class NoticesDeliveryTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self, repository='FixtureOwner/NoticesTest', repository_id=42):
+        self.repository, self.repository_id = repository, repository_id
         tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name); self.counter = 0
         self.ref = deepcopy(read_json(t.REGISTRY)['baselines']['c1-research-parent-09b91a36']['reference'])
@@ -33,8 +34,8 @@ class NoticesDeliveryTests(unittest.TestCase):
                         transport_sha256=sha(b'synthetic Parent archive'), parent_rows_sha256=sha(b'[]\n'))
         self.ref['authorization']['experiment_id'] = 'OFFLINE_NOTICES_FIXTURE_NOT_AUTHORIZATION'
         def storage(name, asset, data):
-            return {'kind': t.PRIVATE_RELEASE_KIND, 'repository': 'FixtureOwner/NoticesTest',
-                'repository_id': 42, 'release_id': 43, 'tag': 'offline-notices-fixture',
+            return {'kind': t.PRIVATE_RELEASE_KIND, 'repository': self.repository,
+                'repository_id': self.repository_id, 'release_id': 43, 'tag': 'offline-notices-fixture',
                 'asset_id': asset, 'asset_name': name, 'asset_size': len(data), 'immutable_required': True}
         self.ref['storage'] = storage('parent.tar.gz', 51, b'synthetic Parent archive')
         self.ref['parent_rows_storage'] = storage('rows.json', 52, b'[]\n')
@@ -44,7 +45,7 @@ class NoticesDeliveryTests(unittest.TestCase):
         self.data = {51: b'synthetic Parent archive', 52: b'[]\n'}
         self.api_changes = {}; self.requests = []
         self.make_zip()
-        self.env = {'GITHUB_REPOSITORY': 'FixtureOwner/NoticesTest', 'GITHUB_REPOSITORY_ID': '42',
+        self.env = {'GITHUB_REPOSITORY': self.repository, 'GITHUB_REPOSITORY_ID': str(self.repository_id),
                     'TRUSTED_RELEASE_TOKEN': 'synthetic-token-never-log'}
         self.registry = self.root / 'registry.json'; write_json(self.root / 'policy.json', {})
 
@@ -91,7 +92,7 @@ class NoticesDeliveryTests(unittest.TestCase):
                      'draft': False, 'assets': [asset(s) for s in stores]}
             if 'release' in self.api_changes: value.update(self.api_changes['release'])
         else:
-            value = {'id': 42, 'full_name': 'FixtureOwner/NoticesTest', 'private': True}
+            value = {'id': self.repository_id, 'full_name': self.repository, 'private': True}
             if 'repository' in self.api_changes: value.update(self.api_changes['repository'])
         return io.BytesIO(json.dumps(value).encode())
 

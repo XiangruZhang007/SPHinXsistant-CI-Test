@@ -216,8 +216,9 @@ def verify_original(client, d, request):
     base = f"repos/{d['repository']}"
     o = request['original']
     repo = client.json(base)
-    _need(repo.get('full_name') == d['repository'] and repo.get('id') == d['repository_id']
-          and repo.get('private') is True and repo.get('default_branch') == d['default_branch'], 'ORIGINAL_REPOSITORY_MISMATCH')
+    from .trusted_snapshot import repository_identity
+    _need(repository_identity(repo, d['repository'], d['repository_id'])
+          and repo.get('default_branch') == d['default_branch'], 'ORIGINAL_REPOSITORY_MISMATCH')
     latest = client.json(f"{base}/actions/runs/{o['run_id']}")
     attempt = client.json(f"{base}/actions/runs/{o['run_id']}/attempts/1")
     for run in (latest, attempt):

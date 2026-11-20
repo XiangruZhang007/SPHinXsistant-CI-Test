@@ -342,7 +342,9 @@ def verify(project, baseline_path, registry_path, registry_key, proposed_entry, 
                       and subject['baseline']['q1_status'] == q1_status
                       and subject['baseline']['reference_sha256'] == expected_reference_sha256,
                       'REGISTRATION_SUBJECT_IDENTITY_MISMATCH')
-                _need(client.json('repos/' + policy['repository']).get('private') is True,
+                from .trusted_snapshot import repository_identity
+                _need(repository_identity(client.json('repos/' + policy['repository']),
+                                          policy['repository'], policy['repository_id']),
                       'PRIVATE_REGISTRATION_REPOSITORY_REQUIRED')
             else:
                 _need(context.get('registration_subject_version',1) == 1,

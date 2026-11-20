@@ -442,8 +442,9 @@ class GitHubReleasePublisher:
         """
         artifact_digest = _canonical_artifact_digest(artifact_digest)
         repo = self._api('GET', '/repos/' + self.repository)
-        _need(repo.get('full_name') == self.repository and type(repo.get('id')) is int
-              and repo.get('private') is True, 'Repository identity or private visibility check failed')
+        from .trusted_snapshot import repository_identity
+        _need(repository_identity(repo, self.repository, repo.get('id')),
+              'Repository identity or private visibility check failed')
         run = self._api('GET', f'/repos/{self.repository}/actions/runs/{run_id}/attempts/{attempt}')
         _need(type(run.get('id')) is int and run['id'] == run_id
               and type(run.get('run_attempt')) is int and run['run_attempt'] == attempt
@@ -492,8 +493,9 @@ class GitHubReleasePublisher:
 
     def publish(self, prepared, *, run_id, attempt, head_sha, candidate_id):
         repo = self._api('GET', '/repos/' + self.repository)
-        _need(repo.get('full_name') == self.repository and type(repo.get('id')) is int
-              and repo.get('private') is True, 'Repository identity or private visibility check failed')
+        from .trusted_snapshot import repository_identity
+        _need(repository_identity(repo, self.repository, repo.get('id')),
+              'Repository identity or private visibility check failed')
         _need(type(run_id) is int and run_id > 0 and type(attempt) is int and attempt > 0
               and re.fullmatch(r'[0-9a-f]{40}', head_sha or '')
               and re.fullmatch(r'sha256-[0-9a-f]{64}', candidate_id or ''), 'Invalid publication identity')

@@ -21,8 +21,8 @@ P = Path(__file__).resolve().parents[1]
 
 
 class InvocationTests(unittest.TestCase):
-    def setUp(self):
-        self.f = fixtures.TransitionTests(); self.f.setUp(); self.addCleanup(self.f.doCleanups)
+    def setUp(self, repository='FixtureOwner/NoticesTest', repository_id=42):
+        self.f = fixtures.TransitionTests(); self.f.setUp(repository, repository_id); self.addCleanup(self.f.doCleanups)
         f = self.f; self.root = f.root
         f.owner['workflow_path'] = hosted.WORKFLOW
         f.save('configs/owner.json', f.owner)
@@ -40,11 +40,11 @@ class InvocationTests(unittest.TestCase):
             'transaction_id': f.request['transaction_id']}
         self.event = self.root / 'event.json'; self.event.write_text(json.dumps({'inputs': self.inputs}))
         r = f.request; self.prefix = 'repos/' + r['repository']
-        self.repo = {'id': 42, 'full_name': r['repository'], 'private': True,
+        self.repo = {'id': repository_id, 'full_name': r['repository'], 'private': True,
             'default_branch': r['default_branch'], 'owner': {'id': 101, 'type': 'User'}}
         self.run = {'id': 102, 'event': 'workflow_dispatch', 'status': 'in_progress',
             'run_attempt': 1, 'head_branch': r['default_branch'], 'head_sha': r['implementation_revision'],
-            'repository': {'id': 42, 'full_name': r['repository']},
+            'repository': {'id': repository_id, 'full_name': r['repository']},
             'actor': {'id': 101, 'type': 'User', 'login': 'FixtureOwner'},
             'triggering_actor': {'id': 101, 'type': 'User', 'login': 'FixtureOwner'},
             'workflow_id': 103, 'created_at': '2026-11-20T00:00:00Z'}
@@ -60,7 +60,7 @@ class InvocationTests(unittest.TestCase):
             self.prefix + '/contents/' + r['registry_path'] + '?ref=' + r['implementation_revision']: self.remote}
         self.env = {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted', 'RUNNER_ARCH': 'ARM64',
             'GITHUB_WORKSPACE': str(self.root), 'GITHUB_REPOSITORY': r['repository'],
-            'GITHUB_REPOSITORY_ID': '42', 'GITHUB_SHA': r['implementation_revision'],
+            'GITHUB_REPOSITORY_ID': str(repository_id), 'GITHUB_SHA': r['implementation_revision'],
             'GITHUB_REF': 'refs/heads/' + r['default_branch'],
             'GITHUB_WORKFLOW_SHA': r['implementation_revision'],
             'GITHUB_WORKFLOW_REF': r['repository'] + '/' + hosted.WORKFLOW + '@refs/heads/' + r['default_branch'],
