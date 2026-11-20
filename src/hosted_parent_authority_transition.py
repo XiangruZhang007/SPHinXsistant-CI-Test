@@ -27,6 +27,7 @@ DEPLOYMENT_FIELDS = {'schema_version', 'operation', 'request', 'proposal_sha256'
 DISPATCH_FIELDS = {'operation', 'decision', 'request_sha256', 'proposal_sha256',
                    'transition_subject_sha256', 'transaction_id'}
 CODE = ('src/hosted_parent_authority_transition.py',
+        'src/parent_authority_git_audit.py', 'src/parent_authority_github_transport.py',
         'src/parent_authority_transaction.py', 'scripts/parent_authority_transition_hosted.py',
         WORKFLOW, 'src/parent_authority_transition.py',
         'src/owner_manual_baseline_approval.py', 'src/baseline_registration_transaction.py',
@@ -65,7 +66,7 @@ def _deployment():
     need(hashlib.sha256(raw.encode()).hexdigest() == pin, 'TRANSITION_DEPLOYMENT_PIN_MISMATCH')
     config = owner._strict_json(raw)
     need(isinstance(config, dict) and set(config) == DEPLOYMENT_FIELDS
-         and type(config['schema_version']) is int and config['schema_version'] == 1
+         and type(config['schema_version']) is int and config['schema_version'] in (1, 2)
          and config['operation'] == transition.OPERATION, 'INVALID_TRANSITION_DEPLOYMENT')
     transition._shape(config['request'])
     need(config['request']['workflow_path'] == WORKFLOW, 'TRANSITION_WORKFLOW_REQUIRED')
@@ -76,7 +77,19 @@ def _deployment():
          'INVALID_TRANSITION_WORKFLOW_ID')
     # No local path, one-run artifact, boolean or unreviewed remote backend may
     # opt into live mutation. A backend needs a separately reviewed extension.
-    need(config['transaction_backend'] == 'UNCONFIGURED', 'UNREVIEWED_TRANSACTION_BACKEND')
+    backend = config['transaction_backend']
+    if config['schema_version'] == 1 or backend == 'UNCONFIGURED':
+        need(backend == 'UNCONFIGURED', 'UNREVIEWED_TRANSACTION_BACKEND')
+    else:
+        from . import parent_authority_git_audit as audit
+        need(isinstance(backend, dict) and set(backend) == {'kind', 'audit',
+            'history_ruleset_id', 'writer_ruleset_id', 'writer_integration_id'}
+            and backend['kind'] == 'GITHUB_GIT_AUDIT_V1'
+            and isinstance(backend['audit'], dict)
+            and set(backend['audit']) == audit.CONFIG_FIELDS
+            and all(type(backend[k]) is int and backend[k] > 0 for k in (
+                'history_ruleset_id', 'writer_ruleset_id', 'writer_integration_id')),
+            'INVALID_GITHUB_AUDIT_DEPLOYMENT')
     need(digest(subject(config['request'], config['proposal_sha256'], config['workflow_id']))
          == config['subject_sha256'], 'TRANSITION_SUBJECT_PIN_MISMATCH')
     return config
@@ -204,13 +217,55 @@ def _run(project):
                       subject_sha256=observed['subject_sha256'],
                       observed_workflow_run=observed['workflow_run'],
                       durable_transaction_reserved=False)
+        if isinstance(config['transaction_backend'], dict):
+            result['audit_backend'] = _inspect_github_backend(config, observed)
+            # Matching current rules cannot prove credential installation scope
+            # or independent control of rule changes. Never convert observations
+            # into a single-use grant or call the isolated writer here.
+            raise transition.TransitionError('AUDIT_WRITER_AND_INDEPENDENT_GOVERNANCE_NOT_VERIFIED')
         # Run-local directories/artifacts and workflow concurrency do not provide
         # global single-use semantics. Never invoke the local transaction core.
         raise transition.TransitionError('DURABLE_CROSS_RUN_TRANSACTION_BACKEND_NOT_CONFIGURED')
     except Exception as error:
+        from .parent_authority_git_audit import AuditError
         result['reason'] = str(error) if isinstance(error, (transition.TransitionError,
-            owner.OwnerApprovalError)) and re.fullmatch('[A-Z][A-Z0-9_]{0,100}', str(error)) else 'TRANSITION_VERIFICATION_FAILED'
+            owner.OwnerApprovalError, AuditError)) and re.fullmatch('[A-Z][A-Z0-9_]{0,100}', str(error)) else 'TRANSITION_VERIFICATION_FAILED'
     return result
+
+
+def _inspect_github_backend(config, observed):
+    """Connected real REST readback after the genuine existing Owner observer.
+
+    No client/credential override is exposed through the public run() interface.
+    Saved decisions and configured ruleset IDs never stand in for Owner checks.
+    """
+    from . import parent_authority_git_audit as audit
+    from .parent_authority_github_transport import GitHubAuditTransport
+    r = config['request']; backend = config['transaction_backend']; actor = observed['workflow_run']
+    decision = {'schema_version': 1, 'operation': transition.OPERATION,
+        'decision': 'APPROVE_RESTRICTED_BUILD_AUTHORITY_TRANSITION',
+        'proposal_sha256': config['proposal_sha256'], 'request_sha256': digest(r),
+        **{k: r[k] for k in ('transaction_id', 'repository', 'repository_id',
+            'implementation_revision', 'old_registry_sha256', 'result_registry_sha256',
+            'continuous_policy_sha256', 'workflow_path')},
+        'actor_id': actor['actor_id'], 'triggering_actor_id': actor['actor_id'],
+        'run_id': actor['run_id'], 'run_attempt': actor['run_attempt'],
+        'workflow_id': actor['workflow_id'], 'event': actor['event']}
+    binding = audit._binding(observed['proposal'], decision,
+        expected_proposal_sha256=config['proposal_sha256'],
+        expected_subject_sha256=config['subject_sha256'],
+        expected_actor_id=actor['actor_id'], expected_run_id=actor['run_id'])
+    transport = GitHubAuditTransport(backend['audit'], binding, os.environ.get('GH_TOKEN', ''))
+    transport.verify_tree()
+    state = audit._IsolatedGitProtocol(transport, backend['audit'], binding).inspect()
+    need(state['status'] != 'STATE_UNCERTAIN', 'AUDIT_HISTORY_NOT_VERIFIED')
+    governance = transport.observe_governance(backend['history_ruleset_id'],
+        backend['writer_ruleset_id'], backend['writer_integration_id'])
+    need(_deployment() == config, 'TRANSITION_DEPLOYMENT_CHANGED')
+    readback = {**state, 'scope': 'AUTHENTICATED_GITHUB_READBACK_ONLY'}
+    return {'status': 'GITHUB_AUDIT_READBACK_VERIFIED', 'state': readback,
+        'governance': governance, 'authorization': 'NOT_GRANTED',
+        'durable_transaction_reserved': False, 'live_apply': False}
 
 
 def run():

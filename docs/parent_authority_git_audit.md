@@ -1,5 +1,11 @@
 # B4.1 isolated Git audit protocol
 
+The original B4.1 description below is historical. The subsequent
+[GitHub transport integration](parent_authority_hosted_audit_transport.md) adds
+real bounded REST primitives and a read-only Hosted connection while retaining
+the existing protocol and live Writer/governance blocker. `backend_status()`
+continues to deny authority; no real APPLY is activated.
+
 This is an offline protocol adapter and feasibility result, not a deployed durable
 backend. Existing B3/B4 code, Workflow, public APPLY and policies are unchanged.
 `backend_status()` is unconditionally blocked. The private

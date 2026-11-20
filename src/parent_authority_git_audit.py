@@ -1,9 +1,8 @@
-"""Offline Git REST protocol adapter; NOT a live authorization backend.
+"""Non-authorizing Git REST protocol; NOT a live authorization backend.
 
-No network implementation, credentials, environment switch or public APPLY path
-is provided here. The private adapter receives an isolated transport in tests.
-Its synthetic successes never authenticate an Owner or grant build authority.
-Live integration additionally needs independently verified audit governance.
+The network transport is separate. The Hosted observer may inspect its chain,
+but never reserve or consume before independent Writer/governance verification.
+Synthetic successes never authenticate an Owner or grant build authority.
 """
 from copy import deepcopy
 import hashlib
@@ -106,10 +105,12 @@ def _parse(message):
 
 
 class _IsolatedGitProtocol:
-    """Private offline adapter. `transport.request` implements isolated API fixtures.
+    """Private protocol adapter for isolated fixtures and read-only Hosted scans.
 
-    There is deliberately no HTTP/GitHubCLI transport or production caller.
-    All statuses have authorization=NOT_GRANTED. Governance pins name a future
+    Writes remain nonoperative in the Hosted caller. Historical protocol statuses
+    retain authorization=NOT_GRANTED and OFFLINE_PROTOCOL_TEST scope; a Hosted
+    observer separately labels its authenticated read-only transport evidence.
+    Governance pins name a future
     review subject, not proof that real repository rules have been enforced.
     """
     def __init__(self, transport, config, binding):
@@ -144,6 +145,7 @@ class _IsolatedGitProtocol:
         self._prefix = 'repos/' + c['repository']
         self._nonce = None
         self._phase = 'NEW'
+        self._observed_head = None
 
     def _call(self, method, suffix='', body=None):
         try:
@@ -212,6 +214,11 @@ class _IsolatedGitProtocol:
                 _need(event['result_registry_sha256'] is None and event['receipt_sha256'] is None,
                       'PREMATURE_AUDIT_COMPLETION')
             previous = event
+        # Detect rollback/replacement within this process. A fresh runner cannot
+        # infer a deleted prior history from genesis + current metadata alone.
+        _need(self._observed_head is None or self._observed_head in seen,
+              'AUDIT_OBSERVED_HISTORY_ROLLED_BACK')
+        self._observed_head = head
         return head, events
 
     @staticmethod
