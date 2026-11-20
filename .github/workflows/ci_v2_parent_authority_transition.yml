@@ -1,0 +1,95 @@
+name: CI V2 Parent Build Authority Transition
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Exact PARENT_BUILD_AUTHORITY_TRANSITION_V1 operation
+        type: string
+        required: true
+      decision:
+        description: Explicit APPROVE_RESTRICTED_BUILD_AUTHORITY_TRANSITION decision
+        type: string
+        required: true
+      request_sha256:
+        description: Reviewed canonical transition Request digest
+        type: string
+        required: true
+      proposal_sha256:
+        description: Reviewed nonoperative Proposal digest
+        type: string
+        required: true
+      transition_subject_sha256:
+        description: Reviewed operation-specific Subject digest
+        type: string
+        required: true
+      transaction_id:
+        description: Reviewed single-use transaction identity
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+# Serializes this workflow only. It is NOT a durable cross-run replay ledger.
+concurrency:
+  group: parent-authority-transition-${{ github.repository_id }}
+  cancel-in-progress: false
+
+jobs:
+  inspect-transition:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONHASHSEED: '0'
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_CONFIG_NOSYSTEM: '1'
+      PARENT_AUTHORITY_TRANSITION_DEPLOYMENT_JSON: ${{ vars.PARENT_AUTHORITY_TRANSITION_DEPLOYMENT_JSON }}
+      PARENT_AUTHORITY_TRANSITION_DEPLOYMENT_SHA256: ${{ vars.PARENT_AUTHORITY_TRANSITION_DEPLOYMENT_SHA256 }}
+    steps:
+      - name: Check out exact dispatch revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # verified v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Select frozen interpreter
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # verified v5
+        with:
+          python-version: '3.12.3'
+          architecture: arm64
+      - name: Require independently pinned deployment
+        shell: bash
+        run: |
+          python -B - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          raw = os.environ.get('PARENT_AUTHORITY_TRANSITION_DEPLOYMENT_JSON', '')
+          pin = os.environ.get('PARENT_AUTHORITY_TRANSITION_DEPLOYMENT_SHA256', '')
+          if not raw or hashlib.sha256(raw.encode()).hexdigest() != pin:
+              root = Path(os.environ['RUNNER_TEMP']) / ('parent-authority-transition-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'])
+              root.mkdir(mode=0o700)
+              (root / 'result.json').write_text(json.dumps({'status': 'BLOCKED', 'reason': 'TRANSITION_DEPLOYMENT_NOT_CONFIGURED', 'authorization': 'NOT_GRANTED', 'registry_committed': False}) + '\n')
+              raise SystemExit(1)
+          PY
+      - name: Prepare existing pinned verification runtime
+        shell: bash
+        run: |
+          git -c credential.helper= clone --no-checkout https://github.com/Consiliency/treesitter-chunker.git tools/treesitter-chunker
+          git -C tools/treesitter-chunker checkout --detach fb70922076c773d1865176329a03f67ff893fd90
+          python -m venv tools/treesitter-chunker/.venv
+          tools/treesitter-chunker/.venv/bin/python -m pip install -r configs/ci_v2_parser_requirements.txt
+          tools/treesitter-chunker/.venv/bin/python -m pip install -c configs/ci_v2_parser_requirements.txt -e tools/treesitter-chunker
+      - name: Verify operation-specific Owner subject; refuse unconfigured durable backend
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRUSTED_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: tools/treesitter-chunker/.venv/bin/python -B scripts/parent_authority_transition_hosted.py
+      - name: Retain diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # verified v4
+        with:
+          name: parent-authority-transition-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/parent-authority-transition-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: warn
