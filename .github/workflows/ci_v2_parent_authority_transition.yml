@@ -39,8 +39,17 @@ concurrency:
 
 jobs:
   inspect-transition:
+    name: inspect-transition
+    if: >-
+      github.repository == 'XiangruZhang007/SPHinXsistant-CI-Test' &&
+      github.repository_id == '1455203884' && github.ref == 'refs/heads/ci-upstream-refresh' &&
+      github.event_name == 'workflow_dispatch' && github.actor_id == '239840087' && github.run_attempt == 1
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
+    outputs:
+      writer_prepared: ${{ steps.owner-preparation.outputs.writer_prepared }}
+      owner_receipt: ${{ steps.owner-preparation.outputs.owner_receipt }}
+      implementation_files: ${{ steps.owner-preparation.outputs.implementation_files }}
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONHASHSEED: '0'
@@ -82,10 +91,18 @@ jobs:
           tools/treesitter-chunker/.venv/bin/python -m pip install -r configs/ci_v2_parser_requirements.txt
           tools/treesitter-chunker/.venv/bin/python -m pip install -c configs/ci_v2_parser_requirements.txt -e tools/treesitter-chunker
       - name: Verify operation-specific Owner subject; refuse unconfigured durable backend
+        if: vars.PARENT_AUTHORITY_WRITER_PREPARATION_ENABLED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TRUSTED_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: tools/treesitter-chunker/.venv/bin/python -B scripts/parent_authority_transition_hosted.py
+      - name: Prepare verified Owner context for isolated Writer
+        id: owner-preparation
+        if: vars.PARENT_AUTHORITY_WRITER_PREPARATION_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRUSTED_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: tools/treesitter-chunker/.venv/bin/python -B scripts/parent_authority_writer_prepare.py
       - name: Retain diagnostic evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # verified v4
@@ -93,3 +110,61 @@ jobs:
           name: parent-authority-transition-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/parent-authority-transition-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: warn
+
+  trusted-audit-writer:
+    name: trusted-audit-writer
+    needs: inspect-transition
+    if: >-
+      needs.inspect-transition.outputs.writer_prepared == 'true' &&
+      vars.PARENT_AUTHORITY_WRITER_PREPARATION_ENABLED == 'true' &&
+      github.repository == 'XiangruZhang007/SPHinXsistant-CI-Test' &&
+      github.repository_id == '1455203884' && github.ref == 'refs/heads/ci-upstream-refresh' &&
+      github.event_name == 'workflow_dispatch' && github.actor_id == '239840087' && github.run_attempt == 1
+    environment: ci-v2-audit-writer
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONHASHSEED: '0'
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_CONFIG_NOSYSTEM: '1'
+      PARENT_AUTHORITY_WRITER_PREPARATION_ENABLED: ${{ vars.PARENT_AUTHORITY_WRITER_PREPARATION_ENABLED }}
+      PARENT_AUTHORITY_TRANSITION_DEPLOYMENT_JSON: ${{ vars.PARENT_AUTHORITY_TRANSITION_DEPLOYMENT_JSON }}
+      PARENT_AUTHORITY_TRANSITION_DEPLOYMENT_SHA256: ${{ vars.PARENT_AUTHORITY_TRANSITION_DEPLOYMENT_SHA256 }}
+      OWNER_PREPARATION_RECEIPT: ${{ needs.inspect-transition.outputs.owner_receipt }}
+      OWNER_IMPLEMENTATION_FILES: ${{ needs.inspect-transition.outputs.implementation_files }}
+    steps:
+      - name: Check out exact reviewed Writer revision on a fresh runner
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # verified v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Select frozen standard-library interpreter
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # verified v5
+        with:
+          python-version: '3.12.3'
+          architecture: arm64
+      - name: Independently gate context before any App credential input
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -I -S -B scripts/parent_authority_writer_gate.py
+      - name: Mint only the dedicated repository installation token
+        id: app-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # verified v3, node24
+        with:
+          app-id: '5855475'
+          private-key: ${{ secrets.CI_V2_AUDIT_APP_PRIVATE_KEY }}
+          owner: XiangruZhang007
+          repositories: SPHinXsistant-CI-Test
+          permission-contents: write
+          skip-token-revoke: 'false'
+          github-api-url: https://api.github.com
+      - name: Verify installation scope without an audit write or APPLY
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PARENT_AUTHORITY_AUDIT_TOKEN: ${{ steps.app-token.outputs.token }}
+          ACTUAL_WRITER_INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
+        run: python -I -S -B scripts/parent_authority_writer_gate.py --verify-token

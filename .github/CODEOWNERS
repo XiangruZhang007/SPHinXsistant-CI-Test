@@ -1,0 +1,6 @@
+# Trusted Writer implementation and authority configuration review scope.
+/.github/CODEOWNERS @XiangruZhang007
+/.github/workflows/ @XiangruZhang007
+/scripts/ @XiangruZhang007
+/src/ @XiangruZhang007
+/configs/ @XiangruZhang007

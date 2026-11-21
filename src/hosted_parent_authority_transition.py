@@ -27,7 +27,9 @@ DEPLOYMENT_FIELDS = {'schema_version', 'operation', 'request', 'proposal_sha256'
 DISPATCH_FIELDS = {'operation', 'decision', 'request_sha256', 'proposal_sha256',
                    'transition_subject_sha256', 'transaction_id'}
 CODE = ('src/hosted_parent_authority_transition.py',
+        '.github/CODEOWNERS',
         'src/parent_authority_git_audit.py', 'src/parent_authority_github_transport.py',
+        'scripts/parent_authority_writer_prepare.py', 'scripts/parent_authority_writer_gate.py',
         'src/parent_authority_transaction.py', 'scripts/parent_authority_transition_hosted.py',
         WORKFLOW, 'src/parent_authority_transition.py',
         'src/owner_manual_baseline_approval.py', 'src/baseline_registration_transaction.py',
@@ -255,7 +257,10 @@ def _inspect_github_backend(config, observed):
         expected_proposal_sha256=config['proposal_sha256'],
         expected_subject_sha256=config['subject_sha256'],
         expected_actor_id=actor['actor_id'], expected_run_id=actor['run_id'])
-    transport = GitHubAuditTransport(backend['audit'], binding, os.environ.get('GH_TOKEN', ''))
+    # A dedicated App token is separate from the Owner-observation reader token.
+    # Default scope remains read-only, regardless of the token's API capabilities.
+    transport = GitHubAuditTransport(backend['audit'], binding,
+        os.environ.get('PARENT_AUTHORITY_AUDIT_TOKEN', os.environ.get('GH_TOKEN', '')))
     transport.verify_tree()
     state = audit._IsolatedGitProtocol(transport, backend['audit'], binding).inspect()
     need(state['status'] != 'STATE_UNCERTAIN', 'AUDIT_HISTORY_NOT_VERIFIED')

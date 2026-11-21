@@ -1,0 +1,50 @@
+name: Owner requested Bot proposal PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      proposal_branch:
+        description: Already uploaded reviewed ci-v2-proposals/ branch
+        required: true
+        type: string
+      proposal_sha:
+        description: Exact reviewed remote source commit
+        required: true
+        type: string
+      expected_base_sha:
+        description: Exact reviewed default branch commit
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ci-v2-bot-proposal
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    if: >-
+      github.repository == 'XiangruZhang007/SPHinXsistant-CI-Test' &&
+      github.repository_id == '1455203884' &&
+      github.actor_id == '239840087' &&
+      github.ref == 'refs/heads/ci-upstream-refresh' &&
+      github.run_attempt == 1
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Create Bot PR without executing proposal code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROPOSAL_BRANCH: ${{ inputs.proposal_branch }}
+          PROPOSAL_SHA: ${{ inputs.proposal_sha }}
+          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
+        run: python3 -I -S -B scripts/create_bot_proposal_pr.py
