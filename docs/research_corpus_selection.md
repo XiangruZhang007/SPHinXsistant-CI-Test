@@ -1,5 +1,17 @@
 # Isolated reviewed research Corpus selection
 
+`verify_gradio_loading(review, corpus, baseline_root, notices_path=..., queries=[...])`
+connects the same verified selection to the existing fresh-process Gradio check.
+Use an already installed application-compatible interpreter and one to three
+bounded queries. It verifies the real application's callback-owned RetrievalV1,
+all loaded records and actual BM25 hits, closes the app and removes the temporary
+selection. The child receives no CI/provider credentials, uses external caches,
+denies Python network access and allows only local Git inspection subprocesses.
+This is isolated research reinitialization, not hot reload, publication, P8
+authorization or a persistent production update. Retained approval/quality limits
+remain in the receipt; no new build, R2 or replay occurs. An OS network namespace
+can additionally isolate acceptance execution without changing application code.
+
 `research_corpus_selection.verify(review, corpus, baseline_root, notices_path=...)`
 checks a caller's independently reviewed Registry raw-file pin, reference,
 Baseline manifest, Candidate/Baseline metadata and exact JSONL bytes/count/fields.

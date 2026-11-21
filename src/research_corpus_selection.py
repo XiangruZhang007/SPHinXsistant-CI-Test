@@ -169,3 +169,35 @@ def select(review, corpus_path, baseline_root, *, notices_path=None, purpose='RE
         _need(file_digest(review.registry_path) == review.registry_sha256, 'REGISTRY_IDENTITY_MISMATCH')
         yield ResearchSelection(path, {**receipt, 'selection': switched,
                                       'notices_path': str(retained_notices) if retained_notices else None})
+
+
+def verify_gradio_loading(review, corpus_path, baseline_root, *, notices_path=None,
+                          queries=(), purpose='RESEARCH_LOADING_ONLY'):
+    """Qualified local artifact -> P9 selection -> fresh real app/BM25 -> close.
+
+    No download, publication, approval, production pointer or persistent server.
+    Run with an already installed application-compatible Python environment.
+    The independent review/Registry/notices gates remain authoritative. The
+    caller must separately authorize this bounded isolated research execution.
+    """
+    _need(isinstance(queries, (tuple, list)) and 1 <= len(queries) <= 3
+          and all(isinstance(q, str) and 0 < len(q.strip()) <= 2048 for q in queries),
+          'BOUNDED_RESEARCH_QUERIES_REQUIRED')
+    from .corpus_update_integration import _load_gradio
+    with select(review, corpus_path, baseline_root, notices_path=notices_path,
+                purpose=purpose) as selected:
+        path = Path(selected.environment()['SPHINX_CORPUS_PATH'])
+        loaded = _load_gradio(path, review.corpus_sha256, queries=queries)
+        _need(loaded.get('sha256') == review.corpus_sha256
+              and loaded.get('corpus_path') == str(path) and loaded.get('records') == review.records
+              and loaded.get('retriever_class') == 'src.retrieval_v1.RetrievalV1'
+              and loaded.get('complete_records_equal') is True
+              and loaded.get('callbacks_share_assistant') is True
+              and loaded.get('application_closed') is True
+              and [x.get('query') for x in loaded.get('retrieval', [])] == list(queries),
+              'RESEARCH_RUNTIME_BINDING_MISMATCH')
+        _need(file_digest(path) == review.corpus_sha256, 'CORPUS_IDENTITY_MISMATCH')
+        return {'status': 'RESEARCH_GRADIO_LOADING_VERIFIED', 'scope': 'RESEARCH_LOADING_ONLY',
+                'identity': selected.receipt, 'application': loaded,
+                'application_running': False, 'hot_reload': False,
+                'production_promotion': 'NOT_AUTHORIZED'}
