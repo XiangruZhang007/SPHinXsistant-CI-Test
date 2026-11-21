@@ -47,7 +47,7 @@ def _register(workspace, version, raw, expected):
     return {**registered, 'version': version, 'records': count}
 
 
-def _gradio_check(path, expected):
+def _gradio_check(path, expected, queries=()):
     """Executed in a fresh child process; construct, verify, close. No HTTP/LLM."""
     path = Path(path)
     raw = path.read_bytes()
@@ -78,32 +78,58 @@ def _gradio_check(path, expected):
                       'complete_records_equal': True, 'callbacks_share_assistant': True,
                       'retriever_class': 'src.retrieval_v1.RetrievalV1', 'pid': os.getpid(),
                       'application_closed': True}
+            if queries:
+                retrieval = []
+                for query in queries:
+                    hits = retriever.search(query, top_k=5)
+                    storage._need(hits and all(hit.record in records for hit in hits),
+                                  'Research query returned no bound Corpus evidence')
+                    retrieval.append({'query': query, 'top_k': 5, 'results': [
+                        {'rank': rank, 'chunk_id': hit.record['chunk_id'],
+                         'source_path': hit.record['source_path'], 'score': hit.score,
+                         'excerpt': hit.record['content'][:700]}
+                        for rank, hit in enumerate(hits, 1)]})
+                storage._need(hashlib.sha256(path.read_bytes()).hexdigest() == expected,
+                              'Corpus changed during research retrieval')
+                result['retrieval'] = retrieval
         finally:
             if app is not None:
                 app.close()
     return result
 
 
-def _load_gradio(path, expected):
+def _load_gradio(path, expected, *, queries=()):
     """Isolate import-time configuration and dependencies in a short-lived process."""
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(('LLM_', 'OPENAI_', 'AZURE_OPENAI_'))
-           and k not in ('PYTHONPATH', 'PYTHONHOME')}
+    storage._need(isinstance(queries, (list, tuple)) and len(queries) <= 3
+                  and all(isinstance(q, str) and 0 < len(q.strip()) <= 2048 for q in queries),
+                  'Invalid bounded research queries')
+    # Do not forward CI/App credentials, provider credentials, proxy configuration
+    # or arbitrary Python startup settings to application code.
+    env = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ') if k in os.environ}
     with tempfile.TemporaryDirectory(prefix='sphinx-gradio-check-') as temporary:
         env.update({'SPHINX_CORPUS_PATH': str(path), 'PYTHONDONTWRITEBYTECODE': '1',
                     'GRADIO_ANALYTICS_ENABLED': 'False', 'HF_HUB_DISABLE_TELEMETRY': '1',
                     'HF_HUB_OFFLINE': '1', 'GRADIO_TEMP_DIR': temporary,
-                    'XDG_CACHE_HOME': temporary})
+                    'XDG_CACHE_HOME': temporary, 'XDG_CONFIG_HOME': temporary,
+                    'HOME': temporary, 'TMPDIR': temporary, 'PYTHONNOUSERSITE': '1',
+                    'PYTHONHASHSEED': '0'})
         code = ("import sys,json\n"
                 "def guard(event,args):\n"
-                " if event in ('socket.connect','socket.getaddrinfo'):\n"
+                " if event in ('socket.connect','socket.bind','socket.sendto','socket.getaddrinfo',"
+                "'socket.gethostbyname','socket.gethostbyaddr'):\n"
                 "  raise OSError('Networking disabled in isolated Gradio validation')\n"
+                " if event=='subprocess.Popen':\n"
+                "  from pathlib import Path\n"
+                "  a=args[1]\n"
+                "  if not isinstance(a,(list,tuple)) or Path(str(a[0])).name!='git' "
+                "or not any(x in a for x in ('rev-parse','remote')):\n"
+                "   raise OSError('Only local Git inspection allowed in Gradio validation')\n"
                 "sys.addaudithook(guard)\n"
                 "from src.corpus_update_integration import _gradio_check\n"
-                "print(json.dumps(_gradio_check(sys.argv[1],sys.argv[2])))\n")
-        child = subprocess.run([sys.executable, '-B', '-c', code, str(path), expected],
+                "print(json.dumps(_gradio_check(sys.argv[1],sys.argv[2],json.loads(sys.argv[3]))))\n")
+        child = subprocess.run([sys.executable, '-B', '-c', code, str(path), expected, json.dumps(queries)],
                                cwd=PROJECT, env=env, capture_output=True, text=True, timeout=60)
-        storage._need(child.returncode == 0, 'Gradio initialization/verification failed: ' + child.stderr[-2000:])
+        storage._need(child.returncode == 0, 'Isolated Gradio initialization/verification failed')
         return json.loads(child.stdout)
 
 
