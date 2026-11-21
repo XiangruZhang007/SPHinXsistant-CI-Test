@@ -1,6 +1,9 @@
 # Owner-reviewed Bot proposal PRs
 
-Local implementation only. No real PR or dispatch has been performed.
+Initial implementation deployed at
+`9974510d681d5a15be0c194e0c18cb208c33dd7f` on `ci-upstream-refresh`.
+Deployment does not establish genuine Bot PR creation or Owner approval;
+those remain pending a separately authorized Hosted test.
 This supplements `trusted_writer_workflow.md` without changing its seven files
 or its fail-closed Writer gate. The previous document's single-owner PR blocker
 is addressed by a distinct PR author, not by permitting self-approval.
@@ -32,17 +35,17 @@ Owner approval is enforced by the subsequently configured GitHub PR Ruleset;
 the PR body is not an enforcement mechanism. Initial unprotected testing must
 not be described as protection-enforced approval.
 
-## Actual preflight and remaining prerequisite
+## Verified bootstrap deployment and remaining Hosted test
 
-Authenticated GET observed repository public, ID 1455203884, Owner admin access,
-default HEAD `e98fa6122d89edd3bd080e814f0dfa48040096a1`, branch unprotected,
-and only active audit Ruleset A 27770139. Actions default permissions are read;
-`can_approve_pull_request_reviews=false` currently prevents Bot PR creation.
-No setting was changed. A separate Owner decision must enable **Allow GitHub
-Actions to create and approve pull requests** (Settings → Actions → General).
-Keep default token permissions read. That shared setting permits creation and
-approval generally; this workflow implements creation only. Review other trusted
-workflows before enabling it. Never expand the Audit Writer App for this task.
+Authenticated GET after the initial deployment verified the public repository
+ID 1455203884, default HEAD
+`9974510d681d5a15be0c194e0c18cb208c33dd7f`, and the active Bot Workflow.
+The branch remains unprotected, with audit Ruleset A 27770139 preserved.
+The Owner has enabled **Allow GitHub Actions to create and approve pull requests**;
+GET confirmed `can_approve_pull_request_reviews=true` while default token
+permissions remain read. This documentation proposal changes no setting.
+That shared setting permits creation and approval generally; this workflow
+implements creation only. Never expand the Audit Writer App for this task.
 The setting inspection uses the authenticated Owner/admin CLI, not the workflow
 token: that settings API needs Administration read, which this job intentionally
 does not have. If the setting remains disabled, GitHub rejects the sole PR POST;
@@ -53,6 +56,10 @@ Owner 239840087. Authenticated creation with a real workflow token and actual
 Owner approval remain untested until a separately authorized Hosted run.
 
 ## Bootstrap without circular protection
+
+The initial code deployment and Actions PR-setting prerequisites below are now
+complete. Proposal upload, a real Bot dispatch, Owner approval and target-branch
+protection still require their separate authorizations and verification.
 
 1. Separately review and authorize a local checkpoint and exact one-time normal
    synchronization of the seven existing Writer files plus this Bot path to the
