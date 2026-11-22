@@ -1,0 +1,54 @@
+{
+  "archive": {
+    "sha256": "95397523de2bd6c70813604fc828430fd9e6494da14696f4fa486af118b152c4",
+    "storage": {
+      "asset_id": 780676875,
+      "asset_name": "research-candidate-76105a0d-complete-run.tar.gz",
+      "asset_size": 54568087,
+      "immutable_required": true,
+      "kind": "GITHUB_PRIVATE_RELEASE_ASSET",
+      "release_id": 454787335,
+      "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
+      "repository_id": 1455203884,
+      "tag": "ci-v2-research-candidate-76105a0d"
+    }
+  },
+  "kind": "RESEARCH_CANDIDATE_LOADING_INPUTS",
+  "notices": {
+    "sha256": "dbfc7fba58f65616f5e00e27804ff6943d7f85174320ba5307169ed86c5196eb",
+    "storage": {
+      "asset_id": 780683404,
+      "asset_name": "research-candidate-76105a0d-notices.zip",
+      "asset_size": 12757,
+      "immutable_required": true,
+      "kind": "GITHUB_PRIVATE_RELEASE_ASSET",
+      "release_id": 454787335,
+      "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
+      "repository_id": 1455203884,
+      "tag": "ci-v2-research-candidate-76105a0d"
+    }
+  },
+  "purpose": "RESEARCH_LOADING_ONLY",
+  "schema_version": 1,
+  "subject": {
+    "base_source_state": "sha256-96d84d8f4a25c8a49e77aadca9d6a8accc247153bb7e0645dbf443ce71c6c151",
+    "base_upstreams": {
+      "SPHinXsim": "9cdae783e3ef3f8926c2174a0db89e96846befad",
+      "SPHinXsys": "4e686ee357de1cb798ac47eb760dd79e2fb407ff"
+    },
+    "build_fingerprint": "7f66fe80e92d7263d5147d4fea551855184af75829f5b62993eb162acceb0cd8",
+    "build_policy_sha256": "299aa0fd6925d9224432ddc474ec2f0e66edad89fbb1d031350a7b413bd68727",
+    "candidate_id": "sha256-76105a0d7e33375966aa09ab0bcf00f035055c0c0ffb96f5f18d6fbca63813b8",
+    "corpus_sha256": "8d989e543a2a25d779ad21fe9893848b65169c8502c0119c324d42536d4ca7e2",
+    "corpus_size": 27057586,
+    "orchestration_fingerprint": "b0b43411aef4d716a15a2f0a794071523fbb3c260dc4cb3fc9b2736eed9e1ac1",
+    "parent_id": "sha256-798d0d1284c7dbba06d5788a062973bf7290cbbfdef28150037371fa78b7188a",
+    "records": 12123,
+    "run_manifest_sha256": "4dcd368beb47ea141d607bf9ca15afaadc528eb7b6b39cd337b7f189cb21e995",
+    "target_source_state": "sha256-f6b3c85e6500d1edb6978f493ec462ac51a36fe506dac614bcc83c9e876e4394",
+    "target_upstreams": {
+      "SPHinXsim": "601343617a339a731d7484f6f43b5aaffb19f61b",
+      "SPHinXsys": "64d6069f7469c4171f7807e7e3118a6d7dee06a5"
+    }
+  }
+}

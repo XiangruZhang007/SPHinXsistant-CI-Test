@@ -1,0 +1,77 @@
+name: CI V2 Research Candidate Gradio Loading
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_implementation_revision:
+        description: Exact separately reviewed deployed commit (full SHA)
+        required: true
+        type: string
+      authorized_review_sha256:
+        description: Independently authorized raw Candidate-loading input SHA-256
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  research-loading:
+    if: >-
+      github.repository == 'XiangruZhang007/SPHinXsistant-CI-Test' &&
+      github.repository_id == '1455203884' && github.ref == 'refs/heads/ci-upstream-refresh' &&
+      github.event_name == 'workflow_dispatch' && github.actor_id == '239840087' && github.run_attempt == 1
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONHASHSEED: '0'
+      GRADIO_ANALYTICS_ENABLED: 'False'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      GIT_TERMINAL_PROMPT: '0'
+      REVIEW_SHA256: 'c5a060a2d4e2fb3232ad0dbfa9c63b040277406190972099306616fdf8f4ed83'
+      AUTHORIZED_REVIEW_SHA256: ${{ inputs.authorized_review_sha256 }}
+      EXPECTED_IMPLEMENTATION_REVISION: ${{ inputs.expected_implementation_revision }}
+    steps:
+      - name: Check out exact trusted dispatch revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Select frozen ARM64 Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12.3'
+          architecture: arm64
+      - name: Prepare frozen package verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c credential.helper= clone --no-checkout https://github.com/Consiliency/treesitter-chunker.git tools/treesitter-chunker
+          git -C tools/treesitter-chunker checkout --detach fb70922076c773d1865176329a03f67ff893fd90
+          python -m venv tools/treesitter-chunker/.venv
+          tools/treesitter-chunker/.venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -r configs/ci_v2_parser_requirements.txt
+          tools/treesitter-chunker/.venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple -c configs/ci_v2_parser_requirements.txt -e tools/treesitter-chunker
+      - name: Prepare separate application interpreter
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/gradio-venv"
+          "$RUNNER_TEMP/gradio-venv/bin/python" -m pip --isolated install --index-url https://pypi.org/simple --only-binary=:all: -r configs/gradio_research_requirements.txt
+          "$RUNNER_TEMP/gradio-venv/bin/python" -m pip check
+          tools/treesitter-chunker/.venv/bin/python -B scripts/check_hosted_candidate_gradio.py --review configs/ci_v2_research_candidate_loading.json --expected-review-sha256 "$REVIEW_SHA256" --authorized-review-sha256 "$AUTHORIZED_REVIEW_SHA256" --expected-implementation-revision "$EXPECTED_IMPLEMENTATION_REVISION" --purpose RESEARCH_LOADING_ONLY --isolation-preflight --app-python "$RUNNER_TEMP/gradio-venv/bin/python" --output "$RUNNER_TEMP/candidate-gradio-verification"
+      - name: Verify immutable Candidate evidence and run isolated real Gradio BM25
+        env:
+          TRUSTED_RELEASE_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/treesitter-chunker/.venv/bin/python -B scripts/check_hosted_candidate_gradio.py --review configs/ci_v2_research_candidate_loading.json --expected-review-sha256 "$REVIEW_SHA256" --authorized-review-sha256 "$AUTHORIZED_REVIEW_SHA256" --expected-implementation-revision "$EXPECTED_IMPLEMENTATION_REVISION" --purpose RESEARCH_LOADING_ONLY --app-python "$RUNNER_TEMP/gradio-venv/bin/python" --output "$RUNNER_TEMP/candidate-gradio-verification"
+      - name: Retain sanitized verification report only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: candidate-gradio-loading-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-gradio-verification/verification.json
+          if-no-files-found: warn
+          retention-days: 14
