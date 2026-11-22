@@ -40,14 +40,35 @@ and chunker revision. A separate application venv uses
 `configs/gradio_research_requirements.txt`, derived from the actually tested
 D3.2-E environment snapshot (not an existing official project lockfile). Both
 are installed from PyPI; the new application file pins the complete resolved
-distribution set. Clean-runner wheel availability and compatibility still need
-the first genuine Hosted run; local tests reuse installed environments.
+distribution set. Run 45025834982 verified dependency installation and pip check,
+then failed at the old unprivileged UID mapping. The replacement privileged
+namespace and nonroot drop still require genuine Hosted verification.
+GitHub documents passwordless sudo for Linux VM runners; the shared preflight
+verifies actual availability rather than assuming those privileges. The local
+review environment requires a sudo password, so no successful privileged local
+namespace execution is claimed by the compatibility tests.
+
+Runtime references: [GitHub administrative privileges](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges),
+[util-linux setpriv](https://man7.org/linux/man-pages/man1/setpriv.1.html).
 
 Only `contents: read` is granted. The built-in token is passed only to the
 transport step; neither Writer secrets nor Environment credentials are used.
-Before application imports, a fresh credential-free child enters a user/network
-namespace containing only loopback. No HTTP listener is started. If the runner
-cannot establish this boundary, the job fails closed. The inherited D3.5 helper
+Before application imports, fixed absolute system utilities run
+`sudo -n -- env -i /usr/bin/unshare --net -- /usr/bin/setpriv ...`.
+Root only creates the network namespace and invokes `setpriv`; Python and Gradio
+run as the original nonroot runner UID/GID, with supplementary groups removed,
+all inheritable/ambient/bounding capabilities dropped and `no_new_privs` set.
+A second `env -i` after dropping privileges establishes the explicit application
+environment; neither sudo-added variables nor credentials are inherited. No
+`sudo -E` or unprivileged UID mappings are used.
+
+The same launcher performs the Workflow isolation preflight and real loading.
+Before any project import, a stdlib guard verifies all real/effective/saved
+UIDs/GIDs, empty supplementary groups, zero effective/permitted/inheritable/
+ambient/bounding capabilities, `no_new_privs`, a different network namespace,
+and only loopback. A UDP route probe to TEST-NET 192.0.2.1 must fail with
+`ENETUNREACH`. No HTTP listener is started. If namespace creation, privilege drop
+or any check fails, the job fails closed. The inherited D3.5 helper
 also denies Python network calls and unauthorized subprocesses. Repository name
 and numeric ID are passed as noncredential locator scope only, not Owner proof.
 
