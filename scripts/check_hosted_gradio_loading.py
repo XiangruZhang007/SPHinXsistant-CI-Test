@@ -30,6 +30,32 @@ CORPUS = '280c1577e2821584e72219324513a7e290b53b0022f913f71545a3d40d45fe83'
 QUERY = 'What should I do if cl is not found when building SPHinXsim on Windows?'
 EXPECTED_CHUNK = 'doc-72b51ca8d4bcd58824925b529c5b38dbf9658f92072a7046f182094ab98af79a'
 
+# Executed only AFTER setpriv, before any project/application import. Ordinary
+# checks (not assert statements) keep the boundary effective under Python -O.
+ISOLATION_GUARD = """
+import os, sys, json, pathlib, socket, errno
+def verify_isolation(uid, gid, original_net):
+    if uid <= 0 or gid <= 0 or os.getresuid() != (uid, uid, uid) or os.getresgid() != (gid, gid, gid) or os.getgroups():
+        raise RuntimeError('PRIVILEGE_DROP_NOT_VERIFIED')
+    status = dict(line.split(':', 1) for line in pathlib.Path('/proc/self/status').read_text().splitlines() if ':' in line)
+    if any(int(status[k].strip(), 16) != 0 for k in ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb')) or status['NoNewPrivs'].strip() != '1':
+        raise RuntimeError('CAPABILITY_DROP_NOT_VERIFIED')
+    if os.readlink('/proc/self/ns/net') == original_net or [n for _, n in socket.if_nameindex()] != ['lo']:
+        raise RuntimeError('NETWORK_NAMESPACE_NOT_VERIFIED')
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        try:
+            probe.connect(('192.0.2.1', 9))
+        except OSError as error:
+            if error.errno != errno.ENETUNREACH:
+                raise RuntimeError('NETWORK_DENIAL_NOT_VERIFIED') from None
+        else:
+            raise RuntimeError('EXTERNAL_ROUTE_AVAILABLE')
+    return {'uid': uid, 'gid': gid, 'capabilities': 'ALL_ZERO', 'no_new_privs': True,
+            'interfaces': ['lo'], 'separate_network_namespace': True,
+            'external_route_probe': 'ENETUNREACH'}
+isolation = verify_isolation(int(sys.argv[1]), int(sys.argv[2]), sys.argv[3])
+"""
+
 
 def need(value, reason):
     if not value:
@@ -51,32 +77,50 @@ def reference(project):
     return registry_path, ref
 
 
-def application_check(project, app_python, work, review, baseline, notices):
-    """App never inherits the transport token or the verifier's CI environment."""
-    env = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ') if k in os.environ}
+def isolated_python(app_python, work, code, arguments=()):
+    """Root runs only fixed OS utilities; Python and all descendants are unprivileged."""
+    uid, gid = os.getuid(), os.getgid()
+    need(uid > 0 and gid > 0, 'NONROOT_CALLER_REQUIRED')
+    app_python, work = Path(app_python), Path(work)
+    need(app_python.is_absolute() and app_python.is_file(), 'APPLICATION_INTERPRETER_REQUIRED')
+    for executable in ('sudo', 'env', 'unshare', 'setpriv'):
+        need(Path('/usr/bin', executable).is_file(), 'ISOLATION_UTILITY_REQUIRED')
+    env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
     env.update(PYTHONDONTWRITEBYTECODE='1', PYTHONHASHSEED='0', HOME=str(work),
                TMPDIR=str(work), XDG_CACHE_HOME=str(work / 'cache'),
                GRADIO_ANALYTICS_ENABLED='False', HF_HUB_OFFLINE='1', HF_HUB_DISABLE_TELEMETRY='1')
     # Noncredential identity scope required by the historical private locator.
     # This conveys neither Actions execution provenance nor Owner authorization.
     env.update(GITHUB_REPOSITORY=REPOSITORY, GITHUB_REPOSITORY_ID='1455203884')
-    config = {'review': {**review.__dict__, 'registry_path': str(review.registry_path)},
-              'baseline': str(baseline), 'notices': str(notices), 'query': QUERY}
-    code = (
-        "import sys,json,pathlib,socket\n"
-        "assert [n for _,n in socket.if_nameindex()]==['lo']\n"
-        "sys.path.insert(0,sys.argv[1])\n"
-        "from src.research_corpus_selection import ReviewedCorpus,verify_gradio_loading\n"
-        "v=json.loads(sys.argv[2]);v['review']['registry_path']=pathlib.Path(v['review']['registry_path'])\n"
-        "r=verify_gradio_loading(ReviewedCorpus(**v['review']),pathlib.Path(v['baseline'])/'corpus.jsonl',"
-        "pathlib.Path(v['baseline']),notices_path=pathlib.Path(v['notices']),queries=[v['query']])\n"
-        "print(json.dumps(r))\n")
-    result = subprocess.run(['unshare', '--user', '--map-root-user', '--net', str(app_python),
-                             '-B', '-c', code, str(project), json.dumps(config)],
-                            cwd=work, env=env, stdin=subprocess.DEVNULL,
+    command = ['/usr/bin/sudo', '-n', '--', '/usr/bin/env', '-i',
+               '/usr/bin/unshare', '--net', '--', '/usr/bin/setpriv',
+               '--reuid=' + str(uid), '--regid=' + str(gid), '--clear-groups',
+               '--inh-caps=-all', '--ambient-caps=-all', '--bounding-set=-all',
+               '--no-new-privs', '--', '/usr/bin/env', '-i']
+    # sudo may add SUDO_* / HOME / PATH. A second env -i after dropping privileges
+    # removes those as well. Never use sudo -E or forward the parent environment.
+    command += [k + '=' + v for k, v in sorted(env.items())]
+    command += [str(app_python), '-B', '-c', ISOLATION_GUARD + code,
+                str(uid), str(gid), os.readlink('/proc/self/ns/net'), *map(str, arguments)]
+    result = subprocess.run(command, cwd=work, env=env, stdin=subprocess.DEVNULL,
                             capture_output=True, text=True, timeout=120)
     need(result.returncode == 0 and len(result.stdout) <= 1024**2, 'ISOLATED_APPLICATION_FAILED')
     return json.loads(result.stdout)
+
+
+def application_check(project, app_python, work, review, baseline, notices):
+    """App never inherits the transport token or the verifier's CI environment."""
+    config = {'review': {**review.__dict__, 'registry_path': str(review.registry_path)},
+              'baseline': str(baseline), 'notices': str(notices), 'query': QUERY}
+    code = (
+        "sys.path.insert(0,sys.argv[4])\n"
+        "from src.research_corpus_selection import ReviewedCorpus,verify_gradio_loading\n"
+        "v=json.loads(sys.argv[5]);v['review']['registry_path']=pathlib.Path(v['review']['registry_path'])\n"
+        "r=verify_gradio_loading(ReviewedCorpus(**v['review']),pathlib.Path(v['baseline'])/'corpus.jsonl',"
+        "pathlib.Path(v['baseline']),notices_path=pathlib.Path(v['notices']),queries=[v['query']])\n"
+        "r['isolation']=isolation\n"
+        "print(json.dumps(r))\n")
+    return isolated_python(app_python, work, code, (project, json.dumps(config)))
 
 
 def consume(project, output, app_python):
@@ -126,6 +170,7 @@ def consume(project, output, app_python):
                   'frozen_runtime': runtime, 'notices': notice_receipt,
                   'R2_verification': 'SEALED_EVIDENCE_INSPECTED / NO_FRESH_REPLAY',
                   'application': app, 'restrictions': loaded['identity']['restrictions'],
+                  'isolation': loaded['isolation'],
                   'assets': [{'asset_id': loc['asset_id'], 'sha256': pin} for _, loc, pin in bindings],
                   'external_network_during_application': 'DENIED_BY_NETWORK_NAMESPACE',
                   'LLM_calls': 0, 'HTTP_server_started': False,
@@ -140,6 +185,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--app-python', type=Path, required=True)
+    parser.add_argument('--isolation-preflight', action='store_true')
     args = parser.parse_args()
     try:
         need(os.environ.get('GITHUB_ACTIONS') == 'true'
@@ -153,6 +199,11 @@ def main():
                                       cwd=PROJECT, text=True).strip()
         need(sha == os.environ.get('GITHUB_SHA') == os.environ.get('GITHUB_WORKFLOW_SHA'),
              'CHECKOUT_REVISION_MISMATCH')
+        if args.isolation_preflight:
+            with tempfile.TemporaryDirectory(prefix='gradio-isolation-', dir=args.output.parent) as tmp:
+                probe = isolated_python(args.app_python, Path(tmp), 'print(json.dumps(isolation))\n')
+            print(json.dumps({'status': 'ISOLATION_PREFLIGHT_VERIFIED', 'isolation': probe}))
+            return 0
         result = consume(PROJECT, args.output, args.app_python)
         print(json.dumps({'status': result['status'], 'records': result['application']['records']}))
         return 0

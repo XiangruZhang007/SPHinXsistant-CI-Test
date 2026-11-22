@@ -47,7 +47,7 @@ jobs:
           python -m venv "$RUNNER_TEMP/gradio-venv"
           "$RUNNER_TEMP/gradio-venv/bin/python" -m pip --isolated install --index-url https://pypi.org/simple --only-binary=:all: -r configs/gradio_research_requirements.txt
           "$RUNNER_TEMP/gradio-venv/bin/python" -m pip check
-          unshare --user --map-root-user --net true
+          tools/treesitter-chunker/.venv/bin/python -B scripts/check_hosted_gradio_loading.py --isolation-preflight --app-python "$RUNNER_TEMP/gradio-venv/bin/python" --output "$RUNNER_TEMP/gradio-verification"
       - name: Verify immutable package and run isolated real Gradio BM25
         env:
           TRUSTED_RELEASE_TOKEN: ${{ github.token }}

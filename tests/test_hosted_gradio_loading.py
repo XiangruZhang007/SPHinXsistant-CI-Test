@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import errno
+from contextlib import ExitStack
 from unittest.mock import patch
 
 from scripts import check_hosted_gradio_loading as consumer
@@ -45,6 +47,7 @@ class HostedGradioLoadingTests(unittest.TestCase):
 
     def loaded(self):
         return {'status': 'RESEARCH_GRADIO_LOADING_VERIFIED', 'scope': 'RESEARCH_LOADING_ONLY',
+                'isolation': {'fixture': True},
                 'application_running': False, 'identity': {'restrictions': ['P8_BLOCKED']},
                 'application': {'sha256': consumer.CORPUS, 'records': 11637,
                                 'complete_records_equal': True, 'callbacks_share_assistant': True,
@@ -161,16 +164,110 @@ class HostedGradioLoadingTests(unittest.TestCase):
         self.patches[-1].stop()
         review = consumer.ReviewedCorpus(self.registry, 'a'*64, 'key', 'candidate', 'baseline', 'b'*64, 1, 1)
         with patch.dict(os.environ, {'TRUSTED_RELEASE_TOKEN': 'synthetic', 'OPENAI_API_KEY': 'synthetic',
-                                    'GH_TOKEN': 'synthetic', 'HTTPS_PROXY': 'synthetic'}):
+                                    'GH_TOKEN': 'synthetic', 'HTTPS_PROXY': 'synthetic',
+                                    'LD_PRELOAD': 'synthetic', 'PYTHONPATH': 'synthetic',
+                                    'SUDO_COMMAND': 'synthetic'}):
             with patch.object(consumer.subprocess, 'run') as run:
                 run.return_value.returncode, run.return_value.stdout = 0, '{}'
                 consumer.application_check(self.project, self.python, self.root, review, self.root, self.root/'notices')
                 args, kwargs = run.call_args
-        self.assertEqual(args[0][:4], ['unshare', '--user', '--map-root-user', '--net'])
-        for key in ('TRUSTED_RELEASE_TOKEN', 'OPENAI_API_KEY', 'GH_TOKEN', 'HTTPS_PROXY', 'GITHUB_TOKEN'):
+        command = args[0]
+        self.assertEqual(command[:7], ['/usr/bin/sudo', '-n', '--', '/usr/bin/env', '-i',
+                                       '/usr/bin/unshare', '--net'])
+        self.assertNotIn('-E', command)
+        self.assertNotIn('--user', command)
+        for option in ('--clear-groups', '--inh-caps=-all', '--ambient-caps=-all',
+                       '--bounding-set=-all', '--no-new-privs'):
+            self.assertIn(option, command)
+        self.assertLess(command.index('/usr/bin/setpriv'), command.index(str(self.python)))
+        self.assertEqual(command.count('-i'), 2)
+        for argument in command:
+            self.assertNotIn('synthetic', argument)
+        inline = command[command.index('-c') + 1]
+        self.assertLess(inline.index('isolation = verify_isolation'),
+                        inline.index('from src.research_corpus_selection import'))
+        for key in ('TRUSTED_RELEASE_TOKEN', 'OPENAI_API_KEY', 'GH_TOKEN', 'HTTPS_PROXY', 'GITHUB_TOKEN',
+                    'LD_PRELOAD', 'PYTHONPATH', 'SUDO_COMMAND'):
             self.assertNotIn(key, kwargs['env'])
         self.assertEqual(kwargs['timeout'], 120)
         self.assertEqual(kwargs['env']['GRADIO_ANALYTICS_ENABLED'], 'False')
+
+    def test_namespace_or_setpriv_failure_blocks_application(self):
+        self.patches[-1].stop()
+        for failure in ('unshare denied', 'setpriv denied'):
+            with self.subTest(failure=failure), patch.object(consumer.subprocess, 'run') as run:
+                run.return_value.returncode = 1
+                run.return_value.stdout = ''
+                run.return_value.stderr = failure
+                with self.assertRaisesRegex(ValueError, 'ISOLATED_APPLICATION_FAILED'):
+                    consumer.isolated_python(self.python, self.root, 'raise AssertionError("not reached")')
+
+    def test_root_caller_cannot_start_launcher(self):
+        with patch.object(consumer.os, 'getuid', return_value=0), patch.object(consumer.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'NONROOT_CALLER_REQUIRED'):
+                consumer.isolated_python(self.python, self.root, 'print("not reached")')
+            run.assert_not_called()
+
+    def test_workflow_preflight_uses_same_launcher_and_cleans_workspace(self):
+        env = {'GITHUB_ACTIONS': 'true', 'GITHUB_REPOSITORY': consumer.REPOSITORY,
+               'GITHUB_REPOSITORY_ID': '1455203884', 'GITHUB_ACTOR_ID': '239840087',
+               'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REF': 'refs/heads/ci-upstream-refresh',
+               'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_SHA': 'a'*40, 'GITHUB_WORKFLOW_SHA': 'a'*40}
+        with patch.dict(os.environ, env), patch.object(consumer.sys, 'argv', [
+                'check', '--isolation-preflight', '--output', str(self.output), '--app-python', str(self.python)]):
+            with patch.object(consumer.subprocess, 'check_output', return_value='a'*40+'\n'):
+                with patch.object(consumer, 'isolated_python', return_value={'fixture': True}) as launcher:
+                    with patch('builtins.print'):
+                        self.assertEqual(consumer.main(), 0)
+        self.assertFalse(launcher.call_args.args[1].exists())
+        self.assertFalse(self.output.exists())
+        self.mocks[3].assert_not_called()
+        self.mocks[7].assert_not_called()
+
+    def guard(self, *, uid=(1000, 1000, 1000), gid=(1000, 1000, 1000), groups=(),
+              caps='0000000000000000', nnp='1', namespace='new', interfaces=('lo',),
+              connection_errno=errno.ENETUNREACH):
+        scope = {}
+        exec(consumer.ISOLATION_GUARD.rsplit('\nisolation = ', 1)[0], scope)
+        status = '\n'.join(k + ': ' + caps for k in ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb'))
+        status += '\nNoNewPrivs: ' + nnp
+        with ExitStack() as stack:
+            for name, value in [('getresuid', uid), ('getresgid', gid), ('getgroups', list(groups)),
+                                ('readlink', namespace)]:
+                stack.enter_context(patch.object(scope['os'], name, return_value=value))
+            stack.enter_context(patch.object(Path, 'read_text', return_value=status))
+            stack.enter_context(patch.object(scope['socket'], 'if_nameindex',
+                                            return_value=list(enumerate(interfaces))))
+            probe = stack.enter_context(patch.object(scope['socket'], 'socket'))
+            if connection_errno is not None:
+                probe.return_value.__enter__.return_value.connect.side_effect = OSError(connection_errno, 'fixture')
+            return scope['verify_isolation'](1000, 1000, 'old')
+
+    def test_successful_isolation_guard_fixture(self):
+        receipt = self.guard()
+        self.assertEqual(receipt['external_route_probe'], 'ENETUNREACH')
+        self.assertEqual(receipt['capabilities'], 'ALL_ZERO')
+
+    def test_root_saved_identity_or_supplementary_group_rejected(self):
+        for change in ({'uid': (1000, 0, 0)}, {'gid': (1000, 1000, 0)}, {'groups': (27,)}):
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, 'PRIVILEGE_DROP_NOT_VERIFIED'):
+                self.guard(**change)
+
+    def test_retained_capabilities_or_privilege_regain_rejected(self):
+        for change in ({'caps': '0000000000000001'}, {'nnp': '0'}):
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, 'CAPABILITY_DROP_NOT_VERIFIED'):
+                self.guard(**change)
+
+    def test_same_namespace_or_external_interface_rejected(self):
+        for change in ({'namespace': 'old'}, {'interfaces': ('lo', 'eth0')}):
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, 'NETWORK_NAMESPACE_NOT_VERIFIED'):
+                self.guard(**change)
+
+    def test_external_route_or_unexpected_denial_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, 'EXTERNAL_ROUTE_AVAILABLE'):
+            self.guard(connection_errno=None)
+        with self.assertRaisesRegex(RuntimeError, 'NETWORK_DENIAL_NOT_VERIFIED'):
+            self.guard(connection_errno=errno.EPERM)
 
     def test_workflow_is_manual_read_only_and_never_launches_http(self):
         workflow = (consumer.PROJECT / '.github/workflows/ci_v2_gradio_loading.yml').read_text()
@@ -179,6 +276,8 @@ class HostedGradioLoadingTests(unittest.TestCase):
         self.assertIn('ref: ${{ github.sha }}', workflow)
         self.assertIn('persist-credentials: false', workflow)
         self.assertIn('--only-binary=:all:', workflow)
+        self.assertIn('scripts/check_hosted_gradio_loading.py --isolation-preflight', workflow)
+        self.assertNotIn('--map-root-user', workflow)
         for forbidden in ('pull_request_target:', 'schedule:', 'contents: write', 'secrets.',
                           'environment:', 'PARENT_AUTHORITY_AUDIT_TOKEN', 'build_app().launch'):
             self.assertNotIn(forbidden, workflow)
