@@ -457,6 +457,15 @@ class PreflightRuntimeTests(unittest.TestCase):
             cwd=P, text=True))
         job = current['jobs'].pop('continuous-schedule-preflight')
         original['jobs'].pop('continuous-schedule-preflight')
+        # The six reviewed manual-only guards preserve the historical schedule payload.
+        legacy = {'Clone upstream source repositories', 'Clone pinned treesitter-chunker',
+                  'Install isolated chunk-generation runtime', 'Generate candidate corpus',
+                  'Run deterministic retrieval regression', 'Upload candidate refresh artifacts'}
+        guard = "${{ !(github.event_name == 'workflow_dispatch' && inputs.build_continuous_ci_v2 && !inputs.build_ci_v2) }}"
+        guarded = [s for s in current['jobs']['candidate-refresh']['steps'] if s['name'] in legacy]
+        self.assertEqual({s['name'] for s in guarded}, legacy)
+        for step in guarded:
+            self.assertEqual(step.pop('if', None), guard)
         self.assertEqual(current, original)
         self.assertEqual(job['permissions'], {'contents': 'read', 'actions': 'read'})
         self.assertEqual(job['runs-on'], 'ubuntu-24.04-arm')
