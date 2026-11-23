@@ -325,7 +325,10 @@ class ScheduledTests(unittest.TestCase):
         self.assertEqual(doc['concurrency']['cancel-in-progress'], False)
         self.assertEqual(doc['permissions'], {'contents': 'read'})
         writers = [name for name, job in doc['jobs'].items() if job.get('permissions', {}).get('contents') == 'write']
-        self.assertEqual(writers, ['publish-continuous-candidate'])
+        self.assertEqual(writers, ['publish-continuous-candidate','automatic-parent-writer'])
+        automatic=doc['jobs']['automatic-parent-writer']
+        self.assertEqual(automatic['environment'],'ci-v2-audit-writer')
+        self.assertIn("vars.AUTOMATIC_LIFECYCLE_ENABLED == 'true'",automatic['if'])
         job = doc['jobs']['publish-continuous-candidate']
         self.assertIn("vars.CONTINUOUS_PUBLICATION_ENABLED == 'true'", job['if'])
         self.assertIn("outputs.candidate_built == 'true'", job['if'])
@@ -466,6 +469,21 @@ class PreflightRuntimeTests(unittest.TestCase):
         self.assertEqual({s['name'] for s in guarded}, legacy)
         for step in guarded:
             self.assertEqual(step.pop('if', None), guard)
+        # The explicit automatic-policy route is separately gated. Normalize
+        # only its reviewed additions before comparing the historical workflow.
+        automatic=current['jobs'].pop('automatic-parent-writer')
+        self.assertEqual(automatic['environment'],'ci-v2-audit-writer')
+        self.assertIn("vars.AUTOMATIC_LIFECYCLE_ENABLED == 'true'",automatic['if'])
+        continuous=current['jobs']['continuous-candidate']
+        for name in ('AUTOMATIC_LIFECYCLE_ENABLED','AUTOMATIC_LIFECYCLE_POLICY_PATH','AUTOMATIC_LIFECYCLE_POLICY_SHA256'):
+            self.assertEqual(continuous['env'].pop(name),'${{ vars.'+name+' }}')
+        entry=next(s for s in continuous['steps'] if s.get('id')=='continuous')
+        self.assertIn('scripts/automatic_lifecycle.py build',entry['run'])
+        self.assertIn('else',entry['run'])
+        entry['run']=next(s['run'] for s in original['jobs']['continuous-candidate']['steps'] if s.get('id')=='continuous')
+        publisher=current['jobs']['publish-continuous-candidate']
+        self.assertIn("vars.AUTOMATIC_LIFECYCLE_ENABLED != 'true'",publisher['if'])
+        publisher['if']=publisher['if'].replace(" && vars.AUTOMATIC_LIFECYCLE_ENABLED != 'true'",'')
         self.assertEqual(current, original)
         self.assertEqual(job['permissions'], {'contents': 'read', 'actions': 'read'})
         self.assertEqual(job['runs-on'], 'ubuntu-24.04-arm')

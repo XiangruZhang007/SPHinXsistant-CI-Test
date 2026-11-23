@@ -21,6 +21,10 @@ CONFIG_FIELDS = {'schema_version', 'repository', 'repository_id', 'ref',
 BINDING_FIELDS = {'request_sha256', 'proposal_sha256', 'subject_sha256',
                   'owner_decision_sha256', 'decision', 'baseline_id',
                   'reference_sha256', 'notices_sha256'}
+POLICY_BINDING_FIELDS = (BINDING_FIELDS - {'owner_decision_sha256'}) | {'policy_decision_sha256'}
+POLICY_DECISION_FIELDS = {'schema_version','operation','decision','transaction_id','repository','repository_id',
+    'implementation_revision','old_registry_sha256','result_registry_sha256','policy_sha256',
+    'run_id','run_attempt','actor_id','workflow_id','workflow_path','event','request_sha256','proposal_sha256'}
 EVENT_FIELDS = {'schema_version', 'protocol', 'state', 'previous_sha',
                 'previous_event_sha256', 'binding', 'claim_nonce',
                 'result_registry_sha256', 'receipt_sha256'}
@@ -106,13 +110,12 @@ def _parse(message):
 
 
 class _IsolatedGitProtocol:
-    """Private protocol adapter for isolated fixtures and read-only Hosted scans.
+    """Private non-authorizing protocol, reused behind separately verified gates.
 
-    Writes remain nonoperative in the Hosted caller. Historical protocol statuses
-    retain authorization=NOT_GRANTED and OFFLINE_PROTOCOL_TEST scope; a Hosted
-    observer separately labels its authenticated read-only transport evidence.
-    Governance pins name a future
-    review subject, not proof that real repository rules have been enforced.
+    Config v1 retains manual Owner bindings; config v2 binds an explicit automatic
+    policy decision. Neither authenticates its caller. Historical primitive
+    statuses retain NOT_GRANTED/OFFLINE_PROTOCOL_TEST; real operation success
+    requires the outer trusted gate and independent storage/readback verification.
     """
     def __init__(self, transport, config, binding):
         self._api = transport
@@ -120,11 +123,12 @@ class _IsolatedGitProtocol:
         self._binding = deepcopy(binding)
         c, b = self._config, self._binding
         _need(isinstance(c, dict) and set(c) == CONFIG_FIELDS
-              and type(c['schema_version']) is int and c['schema_version'] == 1,
+              and type(c['schema_version']) is int and c['schema_version'] in (1, 2),
               'INVALID_AUDIT_CONFIG')
-        _need(isinstance(b, dict) and set(b) == BINDING_FIELDS, 'INVALID_AUDIT_BINDING')
+        fields = POLICY_BINDING_FIELDS if c['schema_version'] == 2 else BINDING_FIELDS
+        _need(isinstance(b, dict) and set(b) == fields, 'INVALID_AUDIT_BINDING')
         d = b['decision']
-        _need(isinstance(d, dict) and set(d) == transition.DECISION_FIELDS,
+        _need(isinstance(d, dict) and set(d) == (POLICY_DECISION_FIELDS if c['schema_version'] == 2 else transition.DECISION_FIELDS),
               'INVALID_AUDIT_OWNER_BINDING')
         _need(c['repository'] == d['repository']
               and c['repository_id'] == d['repository_id']
@@ -138,11 +142,19 @@ class _IsolatedGitProtocol:
               'AUDIT_REF_BINDING_MISMATCH')
         _need(_hash(c['genesis_sha'], 40) and _hash(c['tree_sha'], 40)
               and _hash(c['governance_sha256'])
-              and all(_hash(b[k]) for k in BINDING_FIELDS if k.endswith('_sha256'))
+              and all(_hash(b[k]) for k in fields if k.endswith('_sha256'))
               and transition._hash(b['baseline_id'], 'sha256-'), 'INVALID_AUDIT_PINS')
-        _need(digest(d) == b['owner_decision_sha256']
+        _need(digest(d) == b['policy_decision_sha256' if c['schema_version'] == 2 else 'owner_decision_sha256']
               and d['proposal_sha256'] == b['proposal_sha256']
               and d['request_sha256'] == b['request_sha256'], 'AUDIT_OWNER_BINDING_MISMATCH')
+        if c['schema_version'] == 2:
+            _need(d['operation'] == 'AUTOMATIC_PARENT_ADVANCEMENT_V1'
+                  and d['decision'] == 'POLICY_AUTHORIZED_AUTOMATIC_ADVANCEMENT'
+                  and type(d['schema_version']) is int and d['schema_version'] == 1 and d['event'] == 'schedule'
+                  and type(d['run_attempt']) is int and d['run_attempt'] == 1 and _hash(d['implementation_revision'],40) and all(type(d[k]) is int and d[k] > 0
+                    for k in ('run_id','actor_id','workflow_id'))
+                  and _hash(d['policy_sha256']) and _hash(d['old_registry_sha256'])
+                  and _hash(d['result_registry_sha256']), 'INVALID_AUTOMATIC_POLICY_BINDING')
         self._prefix = 'repos/' + c['repository']
         self._nonce = None
         self._phase = 'NEW'
@@ -298,22 +310,32 @@ class _IsolatedGitProtocol:
         self._phase = 'CLOSED'
         try:
             expected = self._binding['decision']['result_registry_sha256']
-            _need(isinstance(result_bytes, bytes) and hashlib.sha256(result_bytes).hexdigest() == expected
-                  and local_result.get('status') == 'COMPLETED'
-                  and local_result.get('result_registry_sha256') == expected
-                  and local_result.get('scope') == 'ISOLATED_COPY_ONLY'
-                  and isinstance(local_result.get('receipt'), dict), 'ISOLATED_COMPLETION_MISMATCH')
-            receipt = local_result['receipt']; decision = self._binding['decision']
-            _need(receipt.get('status') == 'COMPLETED'
-                  and receipt.get('operation') == transition.OPERATION
-                  and receipt.get('transaction_id') == decision['transaction_id']
-                  and receipt.get('proposal_sha256') == self._binding['proposal_sha256']
-                  and receipt.get('request_sha256') == self._binding['request_sha256']
-                  and receipt.get('old_registry_sha256') == decision['old_registry_sha256']
-                  and receipt.get('result_registry_sha256') == receipt.get('registry_sha256') == expected
-                  and receipt.get('scope') == 'ISOLATED_COPY_ONLY'
-                  and all(_hash(receipt.get(k)) for k in ('prepared_sha256', 'evidence_sha256', 'journal_id')),
-                  'ISOLATED_RECEIPT_BINDING_MISMATCH')
+            if self._config['schema_version'] == 2:
+                receipt = local_result.get('receipt', {})
+                _need(isinstance(result_bytes, bytes) and hashlib.sha256(result_bytes).hexdigest() == expected
+                      and local_result.get('status') == 'COMPLETED'
+                      and local_result.get('scope') == 'DERIVED_DATA_REF_ONLY'
+                      and receipt == {'operation':'AUTOMATIC_PARENT_ADVANCEMENT_V1',
+                          'transaction_id':self._binding['decision']['transaction_id'],
+                          'state_sha':receipt.get('state_sha'),'registry_sha256':expected}
+                      and _hash(receipt['state_sha'],40),'DERIVED_COMPLETION_MISMATCH')
+            else:
+                _need(isinstance(result_bytes, bytes) and hashlib.sha256(result_bytes).hexdigest() == expected
+                      and local_result.get('status') == 'COMPLETED'
+                      and local_result.get('result_registry_sha256') == expected
+                      and local_result.get('scope') == 'ISOLATED_COPY_ONLY'
+                      and isinstance(local_result.get('receipt'), dict), 'ISOLATED_COMPLETION_MISMATCH')
+                receipt = local_result['receipt']; decision = self._binding['decision']
+                _need(receipt.get('status') == 'COMPLETED'
+                      and receipt.get('operation') == transition.OPERATION
+                      and receipt.get('transaction_id') == decision['transaction_id']
+                      and receipt.get('proposal_sha256') == self._binding['proposal_sha256']
+                      and receipt.get('request_sha256') == self._binding['request_sha256']
+                      and receipt.get('old_registry_sha256') == decision['old_registry_sha256']
+                      and receipt.get('result_registry_sha256') == receipt.get('registry_sha256') == expected
+                      and receipt.get('scope') == 'ISOLATED_COPY_ONLY'
+                      and all(_hash(receipt.get(k)) for k in ('prepared_sha256', 'evidence_sha256', 'journal_id')),
+                      'ISOLATED_RECEIPT_BINDING_MISMATCH')
             head, events = self._scan()
             _need(len(events) == 2 and events[-1][1]['claim_nonce'] == self._nonce,
                   'AUDIT_CLAIM_NOT_CONSUMED')

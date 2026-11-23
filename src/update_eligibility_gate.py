@@ -254,3 +254,20 @@ def main(argv=None):
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
+
+def evaluate_automatic(project, artifact, policy, candidate_id, parent):
+    """Explicit native-v4 successor; historical blocking-only readers unchanged.
+
+    Qualification uses complete original measurements and the protected policy;
+    supplementary historical Q1 reports cannot enter through this interface.
+    This evidence decision alone grants neither execution nor production rights.
+    """
+    from . import automatic_candidate as native
+    verified=native.verify(project,artifact,policy,candidate_id,parent)
+    report=verified['report']
+    eligible=(verified['eligible'] is True and report['accepted'] is True
+        and report['status']=='QUALITY_ACCEPTED' and report['q1']=='QUALIFIED_FOR_VERSION_PAIR'
+        and report['P8']=='ELIGIBLE' and report['reasons']==[])
+    return {'schema_version':1,'gate_mode':'AUTOMATIC_QUALITY_V2','decision':'ELIGIBLE' if eligible else 'P8_BLOCKED',
+        'reasons':report['reasons'],'verified':verified,'authorization':'NOT_GRANTED'}
