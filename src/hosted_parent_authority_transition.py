@@ -1,4 +1,4 @@
-"""Dedicated transition observation; live APPLY blocked without durable backend.
+"""Exact Owner observation and gated durable isolated Writer composition.
 
 No caller-supplied client/context/decision enables this entry point. Tests mock
 the existing GitHubCLI transport. Registration approvals are never consumed.
@@ -11,6 +11,9 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
+import platform
+import sys
 import subprocess
 
 from . import parent_authority_transition as transition
@@ -30,6 +33,7 @@ CODE = ('src/hosted_parent_authority_transition.py',
         '.github/CODEOWNERS',
         'src/parent_authority_git_audit.py', 'src/parent_authority_github_transport.py',
         'scripts/parent_authority_writer_prepare.py', 'scripts/parent_authority_writer_gate.py',
+        'scripts/parent_authority_writer_execute.py',
         'src/parent_authority_transaction.py', 'scripts/parent_authority_transition_hosted.py',
         WORKFLOW, 'src/parent_authority_transition.py',
         'src/owner_manual_baseline_approval.py', 'src/baseline_registration_transaction.py',
@@ -125,6 +129,14 @@ def _observe(project, config):
     project = Path(project).resolve(); r = config['request']
     _checkout(project, config)
     frozen_runtime(project)
+    return _observe_subject(project, config)
+
+
+def _observe_subject(project, config):
+    # Shared exact Owner/subject checks. Only the reader _observe() runs the
+    # scientific runtime check; the Writer first authenticates that successful
+    # pinned reader job through its existing standard-library gate.
+    project = Path(project).resolve(); r = config['request']
     env = os.environ
     need(env.get('GITHUB_ACTIONS') == 'true' and env.get('RUNNER_ENVIRONMENT') == 'github-hosted'
          and env.get('RUNNER_ARCH') == 'ARM64' and env.get('GITHUB_EVENT_NAME') == 'workflow_dispatch'
@@ -198,7 +210,7 @@ def _notice_path(project, request):
     from . import trusted_snapshot as trust
     fd = tx._open_directory(temp)
     try:
-        name = 'transition-notices-' + request['transaction_id']
+        name = 'transition-notices-' + request['transaction_id'] + '-' + secrets.token_hex(16)
         os.mkdir(name, mode=0o700, dir_fd=fd)
     finally:
         os.close(fd)
@@ -243,20 +255,8 @@ def _inspect_github_backend(config, observed):
     """
     from . import parent_authority_git_audit as audit
     from .parent_authority_github_transport import GitHubAuditTransport
-    r = config['request']; backend = config['transaction_backend']; actor = observed['workflow_run']
-    decision = {'schema_version': 1, 'operation': transition.OPERATION,
-        'decision': 'APPROVE_RESTRICTED_BUILD_AUTHORITY_TRANSITION',
-        'proposal_sha256': config['proposal_sha256'], 'request_sha256': digest(r),
-        **{k: r[k] for k in ('transaction_id', 'repository', 'repository_id',
-            'implementation_revision', 'old_registry_sha256', 'result_registry_sha256',
-            'continuous_policy_sha256', 'workflow_path')},
-        'actor_id': actor['actor_id'], 'triggering_actor_id': actor['actor_id'],
-        'run_id': actor['run_id'], 'run_attempt': actor['run_attempt'],
-        'workflow_id': actor['workflow_id'], 'event': actor['event']}
-    binding = audit._binding(observed['proposal'], decision,
-        expected_proposal_sha256=config['proposal_sha256'],
-        expected_subject_sha256=config['subject_sha256'],
-        expected_actor_id=actor['actor_id'], expected_run_id=actor['run_id'])
+    backend = config['transaction_backend']
+    binding = _audit_binding(config, observed)
     # A dedicated App token is separate from the Owner-observation reader token.
     # Default scope remains read-only, regardless of the token's API capabilities.
     transport = GitHubAuditTransport(backend['audit'], binding,
@@ -276,3 +276,203 @@ def _inspect_github_backend(config, observed):
 def run():
     """No client, actor, decision, filesystem or backend override parameters."""
     return _run(PROJECT)
+
+
+def _audit_binding(config, observed):
+    from . import parent_authority_git_audit as audit
+    r = config['request']; actor = observed['workflow_run']
+    decision = {'schema_version': 1, 'operation': transition.OPERATION,
+        'decision': 'APPROVE_RESTRICTED_BUILD_AUTHORITY_TRANSITION',
+        'proposal_sha256': config['proposal_sha256'], 'request_sha256': digest(r),
+        **{k: r[k] for k in ('transaction_id', 'repository', 'repository_id',
+            'implementation_revision', 'old_registry_sha256', 'result_registry_sha256',
+            'continuous_policy_sha256', 'workflow_path')},
+        'actor_id': actor['actor_id'], 'triggering_actor_id': actor['actor_id'],
+        'run_id': actor['run_id'], 'run_attempt': actor['run_attempt'],
+        'workflow_id': actor['workflow_id'], 'event': actor['event']}
+    return audit._binding(observed['proposal'], decision,
+        expected_proposal_sha256=config['proposal_sha256'],
+        expected_subject_sha256=config['subject_sha256'],
+        expected_actor_id=actor['actor_id'], expected_run_id=actor['run_id'])
+
+
+def _writer_context(project):
+    """No caller-supplied observation: authenticate the successful reader job.
+
+    Scientific dependencies/frozen checks remain in that exact pinned reader.
+    The fresh Writer rechecks all mutable Owner/subject/Registry/policy evidence
+    using stdlib only; it never executes dependency installation or extraction.
+    """
+    from scripts import parent_authority_writer_gate as gate
+    gate.verify(os.environ, Path(project), gate.GitHubRead())
+    gate.verify_token(os.environ, gate.GitHubRead())
+    need(sys.flags.isolated == 1 and sys.flags.no_site == 1
+         and platform.python_version() == '3.12.3' and platform.machine() == 'aarch64',
+         'WRITER_STDLIB_RUNTIME_MISMATCH')
+    config = _deployment()
+    need(isinstance(config['transaction_backend'], dict), 'DURABLE_CROSS_RUN_TRANSACTION_BACKEND_NOT_CONFIGURED')
+    _checkout(project, config)
+    observed = _observe_subject(project, config)
+    need(_deployment() == config, 'TRANSITION_DEPLOYMENT_CHANGED')
+    return config, observed
+
+
+def _writer_governance(transport, backend):
+    """Actual transport observation, never an environment/dispatch approval flag.
+
+    The existing observer currently reports these guarantees NOT_VERIFIED. This
+    adapter must remain blocked until independently verifiable external evidence
+    can satisfy the accepted model; installing a Secret/Ruleset alone cannot do so.
+    """
+    governance = transport.observe_governance(backend['history_ruleset_id'],
+        backend['writer_ruleset_id'], backend['writer_integration_id'])
+    need(governance.get('status') == 'PINNED_RULESETS_OBSERVED'
+         and governance.get('writer_credential_isolation') == 'VERIFIED'
+         and governance.get('independent_governance') == 'VERIFIED',
+         'AUDIT_WRITER_AND_INDEPENDENT_GOVERNANCE_NOT_VERIFIED')
+    return governance
+
+
+def _readback(protocol, count, state, *, receipt=None):
+    """Fresh client + real GET chain; do not trust a phase return code alone."""
+    from . import parent_authority_git_audit as audit
+    reader = audit._IsolatedGitProtocol(protocol._api, protocol._config, protocol._binding)
+    head, events = reader._scan()
+    need(head == protocol._observed_head and len(events) == count
+         and events[-1][1]['state'] == state
+         and events[-1][1]['claim_nonce'] == protocol._nonce,
+         'TRANSACTION_INDEPENDENT_READBACK_MISMATCH')
+    if receipt is not None:
+        need(events[-1][1]['receipt_sha256'] == digest(receipt), 'COMPLETION_RECEIPT_READBACK_MISMATCH')
+    return head
+
+
+def _execute_transaction(project, isolation, config, observed, protocol, *, _revalidate):
+    """Private composition of existing adapters; fixtures are explicitly offline.
+
+    Only run_writer() supplies live context after Writer/governance checks.
+    This function accepts no CLI flags and is not an authorization provider.
+    Protocol OFFLINE statuses retain their historical meaning; completion here
+    records isolated evidence, never authoritative BUILD_CANDIDATE eligibility.
+    """
+    from . import parent_authority_transaction as core
+    from . import baseline_registration_transaction as tx
+    project, isolation = Path(project), Path(isolation)
+    result = {'status': 'BLOCKED', 'authorization': 'NOT_GRANTED',
+        'scope': 'ISOLATED_COPY_ONLY', 'durable_transaction_reserved': False,
+        'transaction_consumed': False, 'registry_committed': False,
+        'authoritative_registry_applied': False, 'build_candidate_authority': 'NOT_GRANTED',
+        'production_promotion': 'NOT_AUTHORIZED', 'phase': 'VERIFY'}
+    def current():
+        need(_revalidate() == observed, 'TRANSITION_AUTHORITY_CHANGED_DURING_EXECUTION')
+        return observed
+    try:
+        r = config['request']; proposal = observed['proposal']
+        need(protocol._config == config['transaction_backend']['audit']
+             and protocol._binding == _audit_binding(config, observed)
+             and observed['status'] == 'API_OWNER_TRANSITION_SUBJECT_VERIFIED'
+             and observed['proposal_sha256'] == digest(proposal) == config['proposal_sha256']
+             and proposal['request'] == r and observed['subject_sha256'] == config['subject_sha256'],
+             'WRITER_TRANSACTION_BINDING_MISMATCH')
+        current()
+        need(file_digest(project / r['registry_path']) == r['old_registry_sha256'], 'STALE_OR_UNBOUND_REGISTRY')
+        result['phase'] = 'RESERVE'
+        result['durable_transaction_reserved'] = None  # Write may persist before a timeout.
+        reservation = protocol.reserve(); need(reservation['status'] == 'RESERVED', 'TRANSACTION_RESERVATION_NOT_GRANTED')
+        result['durable_transaction_reserved'] = True
+        result['reservation_head'] = _readback(protocol, 1, 'RESERVED')
+        current()
+        result['phase'] = 'CONSUME'
+        result['transaction_consumed'] = None
+        consumption = protocol.consume(); need(consumption['status'] == 'CONSUMED_OFFLINE', 'TRANSACTION_CONSUMPTION_NOT_GRANTED')
+        result['transaction_consumed'] = True
+        result['consumption_head'] = _readback(protocol, 2, 'CONSUMED')
+        current()
+        result['phase'] = 'ISOLATED_APPLY'
+        result['registry_committed'] = None
+        local = core._local_apply(project, isolation, proposal,
+            expected_proposal_sha256=config['proposal_sha256'], _revalidate=current)
+        result['local_result'] = local; result['registry_committed'] = local['registry_committed']
+        need(local['status'] == 'COMPLETED', 'ISOLATED_APPLY_NOT_COMPLETED')
+        current()
+        # Reuse the original no-follow lock/read helpers, including exact audit
+        # receipt bytes. No unbounded or symlink-following result-file read.
+        with tx._locked(project, isolation, project / r['registry_path']) as (fd, _):
+            raw = tx._read(fd, tx.REGISTRY)
+            receipt_raw = tx._read(fd, core._id(proposal) + '.completed.json')
+            need(receipt_raw == tx._serialize(local['receipt'])
+                 and hashlib.sha256(raw).hexdigest() == r['result_registry_sha256'],
+                 'ISOLATED_COMPLETION_BYTES_MISMATCH')
+        result['phase'] = 'COMPLETE'
+        completed = protocol.complete(raw, local)
+        need(completed['status'] == 'COMPLETED_OFFLINE', 'DURABLE_COMPLETION_NOT_VERIFIED')
+        result['completion_head'] = _readback(protocol, 3, 'COMPLETED', receipt=local['receipt'])
+        current()
+        need(file_digest(project / r['registry_path']) == r['old_registry_sha256'], 'AUTHORITATIVE_REGISTRY_CHANGED')
+        result.update(status='COMPLETED', phase='VERIFIED',
+            result_registry_sha256=hashlib.sha256(raw).hexdigest(),
+            completion_receipt_sha256=digest(local['receipt']),
+            transaction_id=r['transaction_id'], proposal_sha256=config['proposal_sha256'],
+            subject_sha256=config['subject_sha256'])
+    except Exception as error:
+        # A timeout may have persisted a claim even when no phase receipt was
+        # returned. Never infer NOT_CONSUMED from the Boolean progress fields.
+        result['reason'] = str(error) if isinstance(error, (transition.TransitionError, tx.TransactionError)) and re.fullmatch('[A-Z][A-Z0-9_]{0,100}', str(error)) else 'WRITER_TRANSACTION_FAILED_OR_UNCERTAIN'
+        try:
+            result['reconciliation'] = protocol.inspect()
+        except Exception:
+            result['reconciliation'] = {'status': 'STATE_UNCERTAIN', 'authorization': 'NOT_GRANTED'}
+        result['automatic_retry'] = False
+        if result.get('local_result', {}).get('status') in ('COMMITTED_WITH_ERROR', 'STATE_UNCERTAIN'):
+            result['status'] = result['local_result']['status']
+        elif (result['phase'] in ('ISOLATED_APPLY', 'COMPLETE')
+              or result['durable_transaction_reserved'] is None
+              or result['transaction_consumed'] is None
+              or result['registry_committed']):
+            result['status'] = 'STATE_UNCERTAIN'
+    return result
+
+
+def run_writer():
+    """Trusted Writer entry only; no project, API, decision or approval overrides."""
+    from . import parent_authority_git_audit as audit
+    from .parent_authority_github_transport import GitHubAuditTransport
+    from . import baseline_registration_transaction as tx
+    result = {'status': 'BLOCKED', 'authorization': 'NOT_GRANTED', 'registry_committed': False,
+        'authoritative_registry_applied': False, 'production_promotion': 'NOT_AUTHORIZED'}
+    try:
+        config, observed = _writer_context(PROJECT)
+        backend = config['transaction_backend']; binding = _audit_binding(config, observed)
+        token = os.environ.get('PARENT_AUTHORITY_AUDIT_TOKEN', '')
+        read_transport = GitHubAuditTransport(backend['audit'], binding, token)
+        read_transport.verify_tree()
+        _writer_governance(read_transport, backend)  # Must pass before APPEND exists.
+        transport = GitHubAuditTransport(backend['audit'], binding, token, write_scope='APPEND')
+        transport.verify_tree()
+        protocol = audit._IsolatedGitProtocol(transport, backend['audit'], binding)
+        temp = Path(os.environ.get('RUNNER_TEMP', ''))
+        need(temp.is_absolute() and temp.resolve() == temp.absolute()
+             and not temp.resolve().is_relative_to(PROJECT)
+             and all(os.environ.get(k, '').isdecimal() for k in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')),
+             'UNSAFE_WRITER_RESULT_PATH')
+        root = temp / ('parent-authority-writer-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'])
+        fd = tx._open_directory(temp)
+        try: os.mkdir(root.name, 0o700, dir_fd=fd)
+        finally: os.close(fd)
+        isolation = root / 'isolation'
+        fd = tx._open_directory(root)
+        try: os.mkdir('isolation', 0o700, dir_fd=fd)
+        finally: os.close(fd)
+        old, _ = transition._read(PROJECT, config['request']['registry_path'], config['request']['old_registry_sha256'])
+        fd = tx._open_directory(isolation)
+        try: tx._write_once(fd, tx.REGISTRY, old)
+        finally: os.close(fd)
+        def revalidate():
+            actual, observation = _writer_context(PROJECT)
+            need(actual == config, 'TRANSITION_DEPLOYMENT_CHANGED')
+            _writer_governance(read_transport, backend)
+            return observation
+        return _execute_transaction(PROJECT, isolation, config, observed, protocol, _revalidate=revalidate)
+    except Exception as error:
+        result['reason'] = str(error) if isinstance(error, (transition.TransitionError, audit.AuditError, owner.OwnerApprovalError, ValueError)) and re.fullmatch('[A-Z][A-Z0-9_]{0,100}', str(error)) else 'WRITER_VERIFICATION_FAILED'
+    return result

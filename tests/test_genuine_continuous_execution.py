@@ -517,6 +517,9 @@ class GenuineFormatTests(unittest.TestCase):
         # Restore the adapter bytes from the reviewed pre-F deployment tree.
         historical['implementation']['src/continuous_execution.py'] = '9954be0f719555209881ce8ed7c620d3469c60715aebc8f15c0dad506c9a521a'
         historical['implementation'].update({
+            # Original metadata policy bytes; D4.4 only defers scientific imports.
+            # Independently checked against the same retained a276b709 tree.
+            'src/continuous_build_policy.py': '00243d78fe7c9ed4a262a2c13f7e50adc8ed157f14653b36e4c113284bb3705d',
             # Original Owner verifier bytes retained in checkpoint a276b709.
             'src/owner_manual_baseline_approval.py': 'e4640e57aa703732bf91b08da493892cd07e23f46f77e99b555c8c7e867b4051',
             'src/trusted_snapshot.py': '4f3b2c2a2a0555d3e7fd5deb93891d38dbee990339989d5e832761e70053a4fe',

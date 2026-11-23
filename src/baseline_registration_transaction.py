@@ -19,9 +19,19 @@ import uuid
 from . import published_candidate_verification as evidence
 from . import owner_manual_baseline_approval as owner
 from . import trusted_snapshot as transport
-from . import local_registration_subject as local_subject
-from . import local_candidate_verification as local_remote
 from .corpus_snapshot import canonical, digest, file_digest
+
+def __getattr__(name):
+    # Preserve existing helper aliases without loading scientific dependencies
+    # in the stdlib-only Parent Writer's filesystem/strict-JSON path.
+    if name not in ('local_subject', 'local_remote'):
+        raise AttributeError(name)
+    from importlib import import_module
+    module = import_module('.' + {'local_subject': 'local_registration_subject',
+        'local_remote': 'local_candidate_verification'}[name], __package__)
+    globals()[name] = module
+    return module
+
 
 REGISTRY = 'registry.json'
 LOCK = '.registration.lock'
@@ -164,6 +174,7 @@ def _write_once(fd, name, raw):
 
 def _duplicate_check(project, registry, subject, work, token):
     """Restore historical references; never infer missing Candidate IDs."""
+    from . import local_candidate_verification as local_remote
     candidate = subject['candidate']
     proposed = subject['registry_entry']['reference']
     seen_nodes, seen_candidates = set(), set()
@@ -326,6 +337,7 @@ def _register(project, isolation_directory, *, registry_key, proposed_entry,
     a sandbox against arbitrary same-privilege code. Hosted authority relies on
     the reviewed deployment/code trust root and repeated Owner verification.
     """
+    from . import local_registration_subject as local_subject, local_candidate_verification as local_remote
     result = {'status': 'BLOCKED', 'registry_committed': False, 'registration': 'NOT_PERFORMED',
               'scope': 'ISOLATED_COPY_ONLY', 'production_promotion': 'NOT_AUTHORIZED'}
     local_workspaces = []
@@ -473,6 +485,7 @@ def _register(project, isolation_directory, *, registry_key, proposed_entry,
 
 def _validated_local_audit(fd, record):
     """Retained bytes only. No network, Owner decision or scientific replay."""
+    from . import local_registration_subject as local_subject, local_candidate_verification as local_remote
     subject = local_subject.validate(record['registration_subject'])
     _need(record['evidence_origin'] == 'LOCAL_RESEARCH_EXECUTION'
           and record['request_sha256'] == subject['request_sha256']
@@ -540,6 +553,7 @@ def _validated_local_audit(fd, record):
 
 def _prepared_identity(fd, transaction_id):
     """Validate pinned PREPARED identities independently of completion damage."""
+    from . import local_registration_subject as local_subject
     _need(evidence._sha(transaction_id), 'INVALID_TRANSACTION_ID')
     record = evidence._json(_read(fd, transaction_id + '.prepared.json'))
     _need(record.pop('transaction_id') == transaction_id and digest(record) == transaction_id,
