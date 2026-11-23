@@ -46,7 +46,7 @@ def backend_status():
 
 
 def _binding(proposal, decision, *, expected_proposal_sha256, expected_subject_sha256,
-             expected_actor_id, expected_run_id):
+             expected_actor_id, expected_run_id, governance_policy_sha256=None):
     """Reuse B3 consistency validation, explicitly NOT Owner authentication."""
     r = proposal['request']
     transition.inspect_owner_decision(proposal, decision,
@@ -55,7 +55,8 @@ def _binding(proposal, decision, *, expected_proposal_sha256, expected_subject_s
         expected_actor_id=expected_actor_id, expected_run_id=expected_run_id)
     # Reuse the actual B4 Subject contract, without running its API observer.
     from .hosted_parent_authority_transition import subject
-    _need(digest(subject(r, expected_proposal_sha256, decision['workflow_id']))
+    _need(digest(subject(r, expected_proposal_sha256, decision['workflow_id'],
+          governance_policy_sha256=governance_policy_sha256))
           == expected_subject_sha256, 'AUDIT_SUBJECT_MISMATCH')
     return {'request_sha256': proposal['request_sha256'],
             'proposal_sha256': expected_proposal_sha256,

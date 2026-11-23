@@ -32,6 +32,7 @@ DISPATCH_FIELDS = {'operation', 'decision', 'request_sha256', 'proposal_sha256',
 CODE = ('src/hosted_parent_authority_transition.py',
         '.github/CODEOWNERS',
         'src/parent_authority_git_audit.py', 'src/parent_authority_github_transport.py',
+        'src/owner_managed_governance.py',
         'scripts/parent_authority_writer_prepare.py', 'scripts/parent_authority_writer_gate.py',
         'scripts/parent_authority_writer_execute.py',
         'src/parent_authority_transaction.py', 'scripts/parent_authority_transition_hosted.py',
@@ -54,14 +55,18 @@ def contract(project):
             'files': {name: file_digest(checked_file(project, name)) for name in CODE}}
 
 
-def subject(request, proposal_sha256, workflow_id):
+def subject(request, proposal_sha256, workflow_id, *, governance_policy_sha256=None):
     """One nested Request is the source of all operation-specific identities."""
     transition._shape(request)
     need(transition._hash(proposal_sha256) and type(workflow_id) is int and workflow_id > 0,
          'INVALID_TRANSITION_SUBJECT')
-    return {'schema_version': 1, 'operation': transition.OPERATION,
+    value = {'schema_version': 1, 'operation': transition.OPERATION,
             'request': deepcopy(request), 'request_sha256': digest(request),
             'proposal_sha256': proposal_sha256, 'workflow_id': workflow_id}
+    if governance_policy_sha256 is not None:
+        need(transition._hash(governance_policy_sha256), 'INVALID_GOVERNANCE_SUBJECT_PIN')
+        value.update(schema_version=2, governance_policy_sha256=governance_policy_sha256)
+    return value
 
 
 def _deployment():
@@ -71,8 +76,8 @@ def _deployment():
          'TRANSITION_DEPLOYMENT_NOT_CONFIGURED')
     need(hashlib.sha256(raw.encode()).hexdigest() == pin, 'TRANSITION_DEPLOYMENT_PIN_MISMATCH')
     config = owner._strict_json(raw)
-    need(isinstance(config, dict) and set(config) == DEPLOYMENT_FIELDS
-         and type(config['schema_version']) is int and config['schema_version'] in (1, 2)
+    need(isinstance(config, dict) and set(config) == (DEPLOYMENT_FIELDS | ({'governance'} if config.get('schema_version') == 3 else set()))
+         and type(config['schema_version']) is int and config['schema_version'] in (1, 2, 3)
          and config['operation'] == transition.OPERATION, 'INVALID_TRANSITION_DEPLOYMENT')
     transition._shape(config['request'])
     need(config['request']['workflow_path'] == WORKFLOW, 'TRANSITION_WORKFLOW_REQUIRED')
@@ -96,7 +101,12 @@ def _deployment():
             and all(type(backend[k]) is int and backend[k] > 0 for k in (
                 'history_ruleset_id', 'writer_ruleset_id', 'writer_integration_id')),
             'INVALID_GITHUB_AUDIT_DEPLOYMENT')
-    need(digest(subject(config['request'], config['proposal_sha256'], config['workflow_id']))
+    if config['schema_version'] == 3:
+        from . import owner_managed_governance as governance
+        need(isinstance(backend, dict), 'OWNER_MANAGED_BACKEND_REQUIRED')
+        governance.load(PROJECT, config)
+    need(digest(subject(config['request'], config['proposal_sha256'], config['workflow_id'],
+         governance_policy_sha256=(config['governance']['policy_sha256'] if config['schema_version'] == 3 else None)))
          == config['subject_sha256'], 'TRANSITION_SUBJECT_PIN_MISMATCH')
     return config
 
@@ -117,7 +127,7 @@ def _checkout(project, config):
     need(not _git(project, 'ls-files', '--others', '--exclude-standard', '--',
                   'src', 'scripts', 'configs', '.github').strip(), 'UNTRACKED_TRANSITION_IMPLEMENTATION')
     for name in (*CODE, r['registry_path'], r['owner_policy_path'], r['build_policy_path'],
-                 r['continuous_policy_path']):
+                 r['continuous_policy_path'], *([config['governance']['policy_path']] if config['schema_version'] == 3 else [])):
         _git(project, 'ls-files', '--error-unmatch', '--', name)
         checked_file(project, name)
     need(digest(contract(project)) == config['implementation_contract_sha256']
@@ -293,7 +303,8 @@ def _audit_binding(config, observed):
     return audit._binding(observed['proposal'], decision,
         expected_proposal_sha256=config['proposal_sha256'],
         expected_subject_sha256=config['subject_sha256'],
-        expected_actor_id=actor['actor_id'], expected_run_id=actor['run_id'])
+        expected_actor_id=actor['actor_id'], expected_run_id=actor['run_id'],
+        governance_policy_sha256=(config['governance']['policy_sha256'] if config['schema_version'] == 3 else None))
 
 
 def _writer_context(project):
@@ -317,13 +328,16 @@ def _writer_context(project):
     return config, observed
 
 
-def _writer_governance(transport, backend):
+def _writer_governance(transport, backend, *, config=None, project=None):
     """Actual transport observation, never an environment/dispatch approval flag.
 
-    The existing observer currently reports these guarantees NOT_VERIFIED. This
-    adapter must remain blocked until independently verifiable external evidence
-    can satisfy the accepted model; installing a Secret/Ruleset alone cannot do so.
+    Legacy deployments still require independently verified governance. Only
+    deployment schema 3 explicitly selects the separately policy-pinned Owner-
+    managed contract; it does not certify the historical independence guarantee.
     """
+    if config is not None and config['schema_version'] == 3:
+        from . import owner_managed_governance as owner_governance
+        return owner_governance.observe(project, config, transport)
     governance = transport.observe_governance(backend['history_ruleset_id'],
         backend['writer_ruleset_id'], backend['writer_integration_id'])
     need(governance.get('status') == 'PINNED_RULESETS_OBSERVED'
@@ -446,7 +460,7 @@ def run_writer():
         token = os.environ.get('PARENT_AUTHORITY_AUDIT_TOKEN', '')
         read_transport = GitHubAuditTransport(backend['audit'], binding, token)
         read_transport.verify_tree()
-        _writer_governance(read_transport, backend)  # Must pass before APPEND exists.
+        _writer_governance(read_transport, backend, config=config, project=PROJECT)  # Must pass before APPEND exists.
         transport = GitHubAuditTransport(backend['audit'], binding, token, write_scope='APPEND')
         transport.verify_tree()
         protocol = audit._IsolatedGitProtocol(transport, backend['audit'], binding)
@@ -470,7 +484,7 @@ def run_writer():
         def revalidate():
             actual, observation = _writer_context(PROJECT)
             need(actual == config, 'TRANSITION_DEPLOYMENT_CHANGED')
-            _writer_governance(read_transport, backend)
+            _writer_governance(read_transport, backend, config=config, project=PROJECT)
             return observation
         return _execute_transaction(PROJECT, isolation, config, observed, protocol, _revalidate=revalidate)
     except Exception as error:
