@@ -107,3 +107,153 @@ Reference: https://docs.github.com/en/rest/actions/permissions#get-artifact-and-
 
 Preserve QUALITY_REVIEW_REQUIRED, original Q1_NOT_QUALIFIED_FOR_VERSION_PAIR,
 P8_BLOCKED, REGISTRATION_ONLY and PRODUCTION_NOT_AUTHORIZED.
+
+## D4.1 R1: explicit read-only evidence-format compatibility
+
+R1 adds an independent input adapter; it does not wire automatic execution,
+change any genuine Continuous authority gate, or qualify a Candidate for
+acceptance, registration, future construction, or production use.
+
+| Parent | Candidate | Input contract | Verification |
+|---|---|---|---|
+| Existing verified P2 snapshot | Existing upstream research Candidate | Existing `q1-verified-inputs`, `schema_version: 1` | Original historical loader, unchanged interpretation |
+| Genuine P4.1-verified `schema2-research-baseline` | Upstream research Candidate with the exact immediate Parent edge | `q1-verified-inputs`, `schema_version: 2` | Existing `upstream_provenance.verify` on both packages, independent seal/package pins, lineage and source proofs |
+| Genuine P4.1-verified `schema2-research-baseline` | `genuine-continuous-candidate-v2` | Input schema 2 | Unchanged complete-run `genuine_continuous_execution.verify_package(..., fresh_replay=False)` plus independent Q1 source/rows verification |
+| Genuine P4.1-verified `schema2-research-baseline` | `genuine-continuous-candidate-v3` | Input schema 2 | Same complete-run verifier, including the existing scheduled evidence contract |
+| P2, controlled lifecycle Baseline, unapproved Candidate, or an incompatible package | Genuine Continuous v2/v3 | Unsupported | Fail closed; never synthesize a P2 manifest or relabel a package |
+
+Here `schema2-research-baseline` means the package supported by the existing
+Trusted Snapshot verifier: a genuine upstream Baseline with
+`upstream-baseline.json`, a `RESEARCH_BASELINE` receipt, and `P4_1_VERIFIED` evidence.
+An arbitrary legacy `baseline.json` or saved approval JSON is insufficient.
+
+`q1_current_inputs.prepare(project, root, bindings, *, package_pins=None,
+execution_pins=None, output=None)` retains the historical call. New-format calls
+require independent `base_manifest_sha256`, `target_manifest_sha256`, and
+`base_package_checksum` pins. Continuous inputs additionally require the complete
+existing seven-field `PIN_FIELDS` mapping, supplied independently by the caller.
+For Continuous, `target_manifest_sha256` is the complete run's `checksums.json`
+digest, not a nonexistent Candidate-only seal. These pins identify expected
+bytes; they are not Owner approval or permission to run a build.
+
+For a sealed Continuous run at `workspace/run`, select the existing enclosing
+`workspace` as `output`. The new descriptor is `workspace/q1-auto-inputs.json`,
+never a new member of `run`. Any already-sealed new-format input root also
+requires a separate enclosing descriptor directory. Conflicting format markers
+are rejected rather than interpreted as historical evidence. Paths must stay within this descriptor workspace;
+symlink directories and traversal are rejected. Parent/Candidate rows must be the
+original `run/evidence/parent-rows.json` and
+`run/quality/incremental-raw-results.json`. Input schema 2 uses the project's
+existing frozen benchmark, verified against its existing constant and fingerprint.
+The reader checks package seals, formats, source states, upstream revisions,
+lineage/generation, materialized bytes/modes, documentation subsets, benchmark,
+and archived rows. Complete-run verification also retains Full/Parity, archived
+policy/implementation bindings, original quality evidence, and notices checks.
+No fresh retrieval, R2 replay, construction, or live GitHub authority is performed
+by the adapter. Historical policy consistency is not fresh authorization.
+
+The existing mapper and scoring semantics are unchanged. Historical reports and
+IDs remain immutable. A diagnostic generated under modified Q1 implementation
+bytes has a new implementation fingerprint and may therefore have a new report
+ID; this must be recorded separately rather than rewriting a historical ID.
+`diagnostic_only: true`, `automatic_research_approval: false`,
+`official_score_adjustment: false`, and `production_promotion: NOT_AUTHORIZED`
+remain in force. The original run's `Q1_NOT_QUALIFIED_FOR_VERSION_PAIR` is not
+rewritten by a separately verified supplementary diagnosis.
+
+The new v2/v3 compatibility tests use miniature local Git objects and explicit
+mock publication, Owner, API, and transport observations. They exercise actual
+independent package verifiers, but are not genuine upstream or Hosted evidence.
+Genuine retained P2 evidence is verified separately for backward compatibility.
+No genuine Continuous package is claimed to have been verified merely because a
+fixture carries the genuine-format identifier.
+
+R2 needs separate review and authorization to connect the post-seal diagnostic
+interface to the existing executor and archive consumers. The current executor,
+its Q1 status restrictions, and its permissions remain unchanged in R1. New
+execution-contract digests are implementation identities only: historical and
+deployment pins must not be silently updated, and a stale implementation/package
+combination must continue to fail closed.
+
+## R2: post-seal genuine Continuous supplementary diagnosis
+
+The genuine Continuous executor now calls `supplementary_q1(project, delivery,
+pins)` only after its existing build, independent Full/Parity, R2/replays, seal,
+mandatory package verification, archive construction, authority revalidation,
+and final delivery-directory relocation. It does not run a second Candidate
+builder. The caller supplies the same seven independent verification pins used
+for mandatory package verification. Identity metadata is read only after that
+verification, rather than serving as its own authorization.
+
+Supported genuine v2 and scheduled-format v3 runs use the R1 research-Baseline
+adapter unchanged. The original `run/` directory, `checksums.json`,
+`q1-status.json`, `regression-attribution.json`, result, and `candidate.tar.gz`
+remain unchanged by the supplementary diagnostic. The historical original Q1
+status remains `Q1_NOT_QUALIFIED_FOR_VERSION_PAIR`.
+
+The final delivery adds only these external diagnostic files:
+
+- `q1-auto-inputs.json`: R1 schema-2 descriptor with relative `run/...` paths;
+- `q1-report/`: the existing mapper's JSON report, Markdown, and checksums;
+- `q1-supplement.json`: version-1 supplementary receipt, not an approval record.
+
+The receipt binds the exact Parent edge and generation, Candidate generation
+and identity, source states/upstreams, Corpus and archived-row hashes, package
+and execution pins, original archive digest, descriptor digest, Q1 implementation
+digest, report ID, report raw digest and report-checksums digest. Relative paths
+remain valid when the **whole delivery directory** is relocated. Moving only
+`run/` does not carry or establish a diagnostic.
+
+`verify_supplement(project, delivery, pins, expected_receipt_sha256)` requires
+caller-trusted execution pins and a separately retained raw receipt digest.
+It re-verifies the original sealed package, exact receipt/descriptor bindings,
+Q1 implementation, and report through independent regeneration. A receipt or
+self-declared metadata alone cannot qualify an input. A new code revision needs
+new reviewed execution pins; historical packages are not repinned. A receipt
+hash records integrity, not human approval or a new trust root.
+
+Mandatory original construction and sealed-package verification errors retain
+the original fail-closed behavior. They do not produce a qualified supplement.
+Optional diagnosis distinguishes `Q1_UNSUPPORTED_FORMAT`,
+`Q1_INPUT_QUALIFICATION_FAILED`, `Q1_REPORT_GENERATION_FAILED`, and
+`Q1_REPORT_VERIFICATION_FAILED`, retaining the actual stage and exception type
+without exception bodies or credentials. Partial diagnostic files may remain
+for examination. A failed/unqualified receipt cannot pass `verify_supplement`.
+The helper never overwrites existing supplementary evidence. It checks the
+original package and archive again even after a diagnostic error. Such an
+original preservation failure propagates, rather than becoming a diagnostic
+success. No automatic retry is performed.
+
+Supplementary `QUALIFIED` means verified diagnostic inputs and independently
+verified report generation. `UNCHANGED`, `MOVED`, `UNRESOLVED`,
+`AMBIGUOUS_MAPPING`, `SPLIT`, `MODIFIED`, `REMOVED`, and any other mapper
+classifications remain observations requiring the existing scientific review.
+No frozen R2 score is adjusted, and no scientific approval, registration,
+construction authority, P8 permission, or production activation is granted.
+The original run/result remains authoritative for its original execution.
+
+### Existing transport and completion boundary
+
+Both manual and scheduled genuine Continuous jobs already upload the complete
+`continuous-result/` directory. That existing Actions Artifact therefore carries
+the external supplement without a new Workflow. Its existing retention and
+Artifact authenticity requirements still apply. `continuous_completion.retrieve_build`
+authenticates and extracts the complete original Actions ZIP, so the supplement
+can remain available there for an explicit supplementary verifier.
+
+The existing completion Release has exactly `candidate.tar.gz`,
+`release-manifest.json`, and `completion.json`. `continuous_completion.prepare`
+verifies the original run/archive and copies only that historical three-asset
+set. It neither includes nor verifies the external supplement, and its original
+Q1 field remains unqualified. A later lookup of that completion Release does
+not preserve or establish R2 diagnostic qualification. R2 does not extend this
+publication format, wire supplementary evidence into any approval decision,
+or change completion reuse/deduplication semantics. Durable supplementary
+Release transport/consumption, if required later, needs separately scoped
+review rather than a silent historical format change.
+
+All local v2/v3 integration fixtures use miniature source repositories and
+explicit mocked publication/Owner/API/transport observations. They establish
+local behavior, not genuine Hosted execution or actual upstream/Owner authority.
+Historical pins, deployed Variables, authority gates, Registry, frozen evidence,
+and the primary source worktree remain outside the R2 modification scope.

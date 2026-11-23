@@ -60,7 +60,7 @@ class State:
     controlled_absences: tuple = ()
 
     def validate(self):
-        need(self.origin.get('verification') in ('VERIFIED_P2_P5A1_PAIR', 'CONTROLLED_TEST_FIXTURE'), 'Unverified source origin')
+        need(self.origin.get('verification') in ('VERIFIED_P2_P5A1_PAIR', 'VERIFIED_Q1_FORMAT_PAIR', 'CONTROLLED_TEST_FIXTURE'), 'Unverified source origin')
         need(provenance.state(self.selection) == self.origin['source_state_id'], 'Incorrect source-state identity')
         need(set(self.sources) == {_path(i) for i in self.selection}, 'Incomplete selected-source bytes')
         need(sha(corpus_lines(self.records)) == self.origin['corpus_sha256'], 'Wrong corpus association')
@@ -78,7 +78,7 @@ class State:
             need(record['chunk_id'] not in seen, 'Duplicate record identity'); seen.add(record['chunk_id'])
             _source_span(record, source_bytes(self.sources[path], item['component'] == 'documentation'))
             self.by_records[path].append(record)
-        if self.origin['verification'] == 'VERIFIED_P2_P5A1_PAIR':
+        if self.origin['verification'] in ('VERIFIED_P2_P5A1_PAIR', 'VERIFIED_Q1_FORMAT_PAIR'):
             need(not self.controlled_absences and set(self.tree_proofs) == set(provenance.REPOSITORIES), 'Missing genuine tree proofs')
             for repo, proof in self.tree_proofs.items():
                 need(proof['repository'] == repo and provenance.verify_proof(proof, self.selection) == self.origin['upstreams'][repo], 'Wrong Git provenance')
@@ -416,7 +416,7 @@ def markdown(report):
     return '\n'.join(lines)
 
 
-def load_inputs(project, manifest_path, expected_sha256):
+def _load_legacy_inputs(project, manifest_path, expected_sha256):
     """Fail-closed production boundary. No API calls or new retrieval executions."""
     project, manifest_path = Path(project), Path(manifest_path)
     need(not manifest_path.is_symlink() and file_digest(manifest_path) == expected_sha256, 'Independent input-manifest checksum mismatch')
@@ -465,6 +465,151 @@ def load_inputs(project, manifest_path, expected_sha256):
         rows[label] = read_json(paths[label + '_rows'])
         rescore(rows[label], spec, state.records, [r for r in state.records if r['source_role'] == 'documentation'])
     return spec, states[0], states[1], rows, pins
+
+
+
+# Version 2 is an explicit evidence adapter, not a change to the Q1 mapper or to
+# any Candidate verifier/authority gate. Version 1 retains its original reader.
+FORMAT_PARENT = 'schema2-research-baseline'
+FORMAT_UPSTREAM = 'upstream-research-candidate'
+FORMAT_CONTINUOUS = {'genuine-continuous-candidate-v2', 'genuine-continuous-candidate-v3'}
+PACKAGE_PINS = {'base_manifest_sha256', 'target_manifest_sha256', 'base_package_checksum'}
+
+
+def _directory(root, relative):
+    from pathlib import PurePosixPath
+    need(isinstance(relative, str), 'Invalid Q1 directory path')
+    parts = PurePosixPath(relative)
+    need(not parts.is_absolute() and parts.as_posix() == relative
+         and all(p not in ('', '.', '..') for p in parts.parts) and parts.parts
+         and '\\' not in relative, 'Unsafe Q1 directory path')
+    current = root
+    for part in parts.parts:
+        current = current / part
+        need(not current.is_symlink() and current.is_dir(), 'Unsafe Q1 directory')
+    need(current.resolve().is_relative_to(root.resolve()), 'Q1 input directory escapes root')
+    return current
+
+
+def _load_format_inputs(project, manifest_path, config):
+    from . import genuine_continuous_execution as continuous
+    root = manifest_path.parent; formats = config['formats']; pins = config['pins']
+    fields = {'build_fingerprint', 'base_snapshot_id', 'target_candidate_id', 'base_source_state_id',
+              'target_source_state_id', 'base_upstreams', 'target_upstreams', 'benchmark_sha256'}
+    fields |= {label + '_' + name for label in ('base', 'target')
+               for name in ('corpus_sha256', 'documentation_sha256', 'rows_sha256')}
+    need(isinstance(pins, dict) and set(pins) == fields, 'Invalid Q1 evidence pins')
+    need(set(config) == {'schema_version', 'kind', 'formats', 'paths', 'pins', 'package_pins', 'execution_pins'}
+         and isinstance(formats, dict) and set(formats) == {'base', 'target'}
+         and formats['base'] == FORMAT_PARENT
+         and formats['target'] in {FORMAT_UPSTREAM, *FORMAT_CONTINUOUS}, 'Unsupported Q1 format combination')
+    is_continuous = formats['target'] in FORMAT_CONTINUOUS
+    names = {'base', 'target', 'base_rows', 'target_rows'} | ({'run'} if is_continuous else set())
+    need(isinstance(config['paths'], dict) and set(config['paths']) == names, 'Invalid Q1 format paths')
+    paths = {k: _directory(root, v) if k in ('base', 'target', 'run') else checked_file(root, v)
+             for k, v in config['paths'].items()}
+    need(not (paths['base'] / 'manifest.json').exists()
+         and not (paths['target'] / 'upstream-baseline.json').exists()
+         and (paths['target'] / 'genuine-candidate.json').is_file() is is_continuous
+         and (paths['target'] / 'upstream-candidate.json').is_file() is (not is_continuous),
+         'Ambiguous or contradictory Q1 package formats')
+    package = config['package_pins']
+    need(isinstance(package, dict) and set(package) == PACKAGE_PINS
+         and all(re.fullmatch('[0-9a-f]{64}', value) for value in package.values() if isinstance(value, str))
+         and all(isinstance(value, str) for value in package.values()), 'Invalid independent package pins')
+    for label in ('base', 'target'):
+        need(file_digest(checked_file(paths['run'] if is_continuous and label == 'target' else paths[label], 'checksums.json')) == package[label + '_manifest_sha256'],
+             'Q1 package seal pin mismatch')
+    fp = pins['build_fingerprint']
+    need(digest(current_contract(project)) == fp, 'Incompatible current builder')
+    parent = provenance.verify(project, paths['base'], fp, expected_id=pins['base_snapshot_id'])
+    need(parent['receipt']['kind'] == 'RESEARCH_BASELINE' and parent['P4_1_verification'] == 'P4_1_VERIFIED'
+         and parent['provenance_type'] == 'GENUINE_UPSTREAM'
+         and parent['receipt']['package_checksum'] == package['base_package_checksum'],
+         'Unverified research-baseline Parent')
+    if is_continuous:
+        run = paths['run']; execution = config['execution_pins']
+        need(isinstance(execution, dict) and set(execution) == continuous.PIN_FIELDS
+             and execution['expected_candidate_id'] == pins['target_candidate_id']
+             and execution['expected_manifest_sha256'] == package['target_manifest_sha256'], 'Independent execution pins required')
+        need(paths['base'] == run / 'parent' and paths['target'] == run / 'candidate'
+             and paths['base_rows'] == run / 'evidence/parent-rows.json'
+             and paths['target_rows'] == run / 'quality/incremental-raw-results.json', 'Wrong sealed-run paths')
+        # This unchanged verifier checks the COMPLETE original run, including
+        # seals, Full/Parity, provenance, archived policy/authority and R2 rows.
+        # fresh_replay=False is mandatory: no retrieval, construction or API call.
+        verified = continuous.verify_package(project, run, **execution, fresh_replay=False)
+        metadata = read_json(checked_file(paths['target'], 'genuine-candidate.json'))
+        identity = metadata['identity']
+        need(verified['format'] == metadata['format'] == formats['target']
+             and verified['verification'] == 'PACKAGE_INTEGRITY_VERIFIED', 'Wrong genuine Candidate format')
+        edge = identity['parent']
+        need(edge == {'node_id': parent['node_id'], 'package_checksum': package['base_package_checksum'],
+             'generation': parent['generation'], 'source_state': parent['target_source_state'],
+             'upstreams': parent['upstreams'], 'corpus_sha256': file_digest(paths['base'] / 'corpus.jsonl')},
+             'Wrong authoritative Parent edge')
+        evidence = read_json(checked_file(run, 'evidence/assessment.json'))['source_evidence']
+        proofs = {label: evidence[label + '_proofs'] for label in ('base', 'target')}
+        base_state = edge['source_state']; base_upstreams = edge['upstreams']
+    else:
+        need(config['execution_pins'] is None, 'Unexpected continuous execution pins')
+        target = provenance.verify(project, paths['target'], fp, expected_id=pins['target_candidate_id'])
+        metadata = read_json(checked_file(paths['target'], 'upstream-candidate.json')); identity = metadata['identity']
+        need(metadata['kind'] == FORMAT_UPSTREAM and target['receipt']['kind'] == 'CANDIDATE'
+             and target['provenance_type'] == 'GENUINE_UPSTREAM'
+             and identity['parent'] == provenance._edge(parent['receipt'])
+             and identity['base_snapshot_id'] == parent['node_id'], 'Wrong authoritative version pair')
+        proofs = read_json(checked_file(paths['target'], 'git-proofs.json'))
+        base_state = identity['base_source_state']; base_upstreams = identity['base_upstreams']
+    need(type(identity['generation']) is int and type(parent['generation']) is int
+         and identity['generation'] == parent['generation'] + 1
+         and base_state == parent['target_source_state'] and base_upstreams == parent['upstreams'],
+         'Incorrect generation or lineage')
+    # Use the unchanged project's actual frozen benchmark path, not a new copy.
+    from .approval_evidence import BENCHMARK
+    spec_path = checked_file(project, BENCHMARK)
+    spec = read_json(spec_path); validate_structure(spec)
+    need(file_digest(spec_path) == pins['benchmark_sha256'] == BENCHMARK_SHA, 'Frozen benchmark mismatch')
+    lock = read_json(project / 'configs/ci_v2_runtime_lock.json')
+    frozen_implementation(project, spec_path, lock['quality_policy'])
+    states = []; rows = {}
+    for label, upstreams, source_state in (
+            ('base', parent['upstreams'], base_state),
+            ('target', identity['upstreams'], identity['target_source_state'])):
+        folder = paths[label]; selection = read_json(checked_file(folder, 'selection.json'))
+        records = read_records(checked_file(folder, 'corpus.jsonl'))
+        docs = read_records(checked_file(folder, 'components/documentation.jsonl'))
+        need(provenance.state(selection) == source_state == pins[label + '_source_state_id']
+             and upstreams == pins[label + '_upstreams'], 'Incorrect source-state identity or Git revision')
+        need([r for r in records if r['source_role'] == 'documentation'] == docs, 'Documentation subset mismatch')
+        for suffix, name in (('corpus_sha256', 'corpus.jsonl'), ('documentation_sha256', 'components/documentation.jsonl')):
+            need(file_digest(checked_file(folder, name)) == pins[label + '_' + suffix], 'Wrong Corpus/documentation hash')
+        need(file_digest(paths[label + '_rows']) == pins[label + '_rows_sha256'], 'Archived result checksum mismatch')
+        rows[label] = read_json(paths[label + '_rows']); rescore(rows[label], spec, records, docs)
+        sources = {_path(item): checked_file(folder, 'input/' + _path(item)).read_bytes() for item in selection}
+        origin = {'verification': 'VERIFIED_Q1_FORMAT_PAIR', 'provenance_type': 'GENUINE_UPSTREAM',
+            'package_format': formats[label], 'source_state_id': source_state, 'upstreams': upstreams,
+            'repository_identities': provenance.REPOSITORIES,
+            'package_id': pins['base_snapshot_id' if label == 'base' else 'target_candidate_id'],
+            'build_fingerprint': fp, 'corpus_sha256': pins[label + '_corpus_sha256'],
+            'documentation_sha256': pins[label + '_documentation_sha256'],
+            'archived_rows_sha256': pins[label + '_rows_sha256']}
+        states.append(State(origin, selection, sources, records, proofs[label]).validate())
+    return spec, states[0], states[1], rows, pins
+
+
+def load_inputs(project, manifest_path, expected_sha256):
+    """Read-only format dispatch. Qualification never confers approval/authority."""
+    project, manifest_path = Path(project), Path(manifest_path)
+    need(not manifest_path.is_symlink() and file_digest(manifest_path) == expected_sha256,
+         'Independent input-manifest checksum mismatch')
+    config = read_json(manifest_path)
+    need(isinstance(config, dict) and type(config.get('schema_version')) is int
+         and config.get('kind') == 'q1-verified-inputs', 'Unsupported Q1 input contract')
+    if config['schema_version'] == 1:
+        return _load_legacy_inputs(project, manifest_path, expected_sha256)
+    need(config['schema_version'] == 2, 'Unsupported Q1 input contract')
+    return _load_format_inputs(project, manifest_path, config)
 
 
 def generate(project, manifest_path, expected_sha256):
