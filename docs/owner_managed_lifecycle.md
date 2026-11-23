@@ -62,8 +62,10 @@ The pure calculation is tested with synthetic facts; its ELIGIBLE result is
 versus authenticated producer distinctions and the original restrictions. They
 cannot currently produce operational admission: P8 is blocking-only and the
 Genuine producer/verifier requires research-only quality/Q1/P8 restrictions.
-An accepting evidence/authority integration and its scheduled handoff are still
-**implementation gaps**, not merely missing Secrets or server configuration.
+These historical interfaces remain blocking-only. The separately versioned
+native automatic accepting path and scheduled handoff are implemented in
+[the automatic lifecycle](automatic_lifecycle.md), behind independently reviewed
+policy, protected-root and authenticated producer gates.
 The current historical Candidates remain blocked. The separate qualified Q1
 supplement remains diagnostic and cannot modify their original Q1 or R2.
 
@@ -96,11 +98,11 @@ synthetic lifecycle code and production application behavior remain unchanged.
 
 See [the review-only proposal](derived_registry_automatic_integration.proposal.md).
 The default-branch protection conflicts with unattended authoritative Registry
-writes. The user requested a restricted data-only contract for review. It is
-not approved, implemented or activated by this change. No Writer bypass,
-automatic PR approval or authoritative Registry write is introduced. Dynamic
-Parent advancement/selection awaits that decision and the accepting scientific
-contract. The current Parent remains `REGISTRATION_ONLY`.
+writes. The user accepted the restricted data-only design for implementation and local
+testing. The separate derived writer/consumer and native scientific successor
+are described in [the implementation](automatic_lifecycle.md). No remote
+configuration or activation is authorized by design acceptance. No default-branch
+Writer bypass or automatic PR approval is introduced. The current Parent remains `REGISTRATION_ONLY`.
 
 ## Migration and genuine execution prerequisites
 
@@ -112,7 +114,7 @@ Before using this work operationally, independently review and bind:
 - Actual immutable Parent/Reference/notices/source/Corpus/P4.1/R2 evidence and
   exact initial restricted build authorization.
 - Existing bounded scheduled construction policy/expiry/revocation and producer
-  deployment; scientific acceptance and derived-state integration gaps above.
+  deployment, plus the separately reviewed native automatic policy and pins.
 - Rulesets A/B, fixed audit/genesis, actual App/installation permissions,
   protected Environment approval and reviewed workflow credential isolation.
 - Least-privilege approved-Release transfer, server directories, existing venv,

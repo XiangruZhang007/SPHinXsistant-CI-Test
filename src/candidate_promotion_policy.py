@@ -214,3 +214,14 @@ def main(argv=None):
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
+
+def assess_automatic(project, artifact, policy, candidate_id, parent):
+    """Versioned complete-evidence admission; existing promotion API unchanged."""
+    from . import update_eligibility_gate as gate
+    result=gate.evaluate_automatic(project,artifact,policy,candidate_id,parent)
+    eligible=result['decision']=='ELIGIBLE'
+    return {'schema_version':1,'contract':'AUTOMATIC_QUALITY_V2',
+        'decision':'APPROVED_RELEASE_ELIGIBLE' if eligible else 'PUBLICATION_BLOCKED',
+        'verified':result['verified'],'P8':result['decision'],
+        'production_activation':'SEPARATE_APPROVED_DRIVER_REQUIRED','authorization':'NOT_GRANTED'}

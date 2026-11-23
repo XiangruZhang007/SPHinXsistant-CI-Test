@@ -26,8 +26,8 @@ def stage_and_verify(project, root, version, source, *, corpus_sha256, record_co
     No HTTP listener, LLM request, source edit or production process is started.
     """
     _need(type(record_count) is int and record_count > 0, 'INVALID_EXPECTED_RECORD_COUNT')
-    app_python = Path(app_python)
-    _need(app_python.is_absolute() and app_python.is_file(), 'APPLICATION_INTERPRETER_REQUIRED')
+    from .research_candidate_consumer import application_interpreter
+    app_python = application_interpreter(app_python)
     _need(isinstance(queries, (list,tuple)) and 1 <= len(queries) <= 3
           and all(isinstance(q,str) and 0 < len(q) <= 2048 for q in queries), 'INVALID_BOUNDED_QUERIES')
     project = Path(project).resolve()
@@ -120,3 +120,57 @@ def _replace(driver, current, requested):
     except Exception: pass
     return {'status':'ACTIVE_VERIFIED' if retired else 'ACTIVE_CLEANUP_PENDING',
             'active':requested,'retry':False,'previous_retired':retired}
+
+
+class DeploymentDriver:
+    """Reviewed server-driver interface; never instantiated from Workflow JSON.
+
+    current/activate/restore require durable atomic compare-and-swap routing.
+    start must leave the previous owned process alive. owns must bind an opaque
+    handle to this driver's process identity; stop must refuse active handles.
+    A host supplies these operations once, after its configuration review. This
+    interface does not grant credentials, SSH access or production permission.
+    """
+    def current(self): raise NotImplementedError
+    def verify_current(self, identity): raise NotImplementedError
+    def start(self, identity): raise NotImplementedError
+    def owns(self, handle): raise NotImplementedError
+    def verify(self, handle, identity): raise NotImplementedError
+    def activate(self, expected, requested, handle): raise NotImplementedError
+    def restore(self, expected, previous): raise NotImplementedError
+    def stop(self, handle): raise NotImplementedError
+    def retire(self, previous, *, expected_active): raise NotImplementedError
+
+
+def deploy_selected(project, config, policy, client, store, work, driver, *, app_python):
+    """Resolve actual admitted lineage and immutable bytes before any driver call.
+
+    Drivers are trusted Python integrations, not accepting evidence providers.
+    The genuine selection/transport/scientific checks are always performed here.
+    No host is contacted until a reviewed driver is separately supplied.
+    """
+    from .automatic_lifecycle import select
+    from . import genuine_continuous_execution as genuine
+    from .automatic_lifecycle_policy import load
+    from . import continuous_build_policy as scope
+    from .corpus_snapshot import read_records, file_digest, digest
+    genuine._checkout(project,config)
+    _need(load(project,config)==policy,'DEPLOYMENT_POLICY_CHANGED')
+    settings=scope._read_pinned(project,policy['deployment_path'],policy['deployment_sha256'])
+    _need(set(settings)=={'schema_version','kind','enabled','storage_root','queries'}
+          and settings['schema_version']==1 and settings['kind']=='VERIFIED_GRADIO_DRIVER_V1'
+          and settings['enabled'] is True,'DEPLOYMENT_NOT_CONFIGURED')
+    _need(isinstance(driver,DeploymentDriver),'REVIEWED_DEPLOYMENT_DRIVER_REQUIRED')
+    view,parent,folder,_=select(project,config,policy,client,Path(work),store)
+    _need(view['generation']>0,'NO_ADMITTED_DERIVED_CORPUS')
+    version='corpus-'+parent['corpus_sha256']
+    verified=stage_and_verify(project,settings['storage_root'],version,folder/'corpus.jsonl',
+        corpus_sha256=parent['corpus_sha256'],record_count=len(read_records(folder/'corpus.jsonl')),
+        app_python=app_python,queries=settings['queries'])
+    _need(load(project,config)==policy and store.head()==view['head'],'STALE_DEPLOYMENT_SELECTION')
+    requested={'version':version,'corpus_sha256':parent['corpus_sha256'],
+        'state_sha':view['head'],'parent_id':parent['node_id'],'policy_sha256':policy['policy_sha256']}
+    previous=driver.current()
+    result=_replace(driver,previous,requested)
+    return {**result,'selected_state_sha':view['head'],'corpus_sha256':parent['corpus_sha256'],
+            'storage_verification':verified,'verification_sha256':digest(verified),'scope':'APPROVED_DRIVER_ONLY'}

@@ -264,6 +264,9 @@ jobs:
       CONTINUOUS_BUILD_DEPLOYMENT_SHA256: ${{ vars.CONTINUOUS_BUILD_DEPLOYMENT_SHA256 }}
       CONTINUOUS_CONSTRUCTION_ENABLED: ${{ vars.CONTINUOUS_CONSTRUCTION_ENABLED }}
       CONTINUOUS_PUBLICATION_ENABLED: ${{ vars.CONTINUOUS_PUBLICATION_ENABLED }}
+      AUTOMATIC_LIFECYCLE_ENABLED: ${{ vars.AUTOMATIC_LIFECYCLE_ENABLED }}
+      AUTOMATIC_LIFECYCLE_POLICY_PATH: ${{ vars.AUTOMATIC_LIFECYCLE_POLICY_PATH }}
+      AUTOMATIC_LIFECYCLE_POLICY_SHA256: ${{ vars.AUTOMATIC_LIFECYCLE_POLICY_SHA256 }}
     steps:
       - name: Check out the exact workflow commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # verified v4
@@ -297,9 +300,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TRUSTED_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tools/treesitter-chunker/.venv/bin/python -B scripts/run_continuous_ci_v2.py \
-            --detection "$RUNNER_TEMP/continuous-detection/sphinxsistant_candidate/upstream_status.json" \
-            --work "$RUNNER_TEMP/continuous-work" --output "$RUNNER_TEMP/continuous-result"
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ "$AUTOMATIC_LIFECYCLE_ENABLED" = true ]; then
+            tools/treesitter-chunker/.venv/bin/python -B scripts/automatic_lifecycle.py build \
+              --detection "$RUNNER_TEMP/continuous-detection/sphinxsistant_candidate/upstream_status.json" \
+              --work "$RUNNER_TEMP/continuous-work"
+          else
+            tools/treesitter-chunker/.venv/bin/python -B scripts/run_continuous_ci_v2.py \
+              --detection "$RUNNER_TEMP/continuous-detection/sphinxsistant_candidate/upstream_status.json" \
+              --work "$RUNNER_TEMP/continuous-work" --output "$RUNNER_TEMP/continuous-result"
+          fi
       - name: Preserve continuous Candidate or explicit failure evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # verified v4
@@ -312,7 +321,7 @@ jobs:
   publish-continuous-candidate:
     needs: continuous-candidate
     # Missing Variables evaluate to empty, so real publication is disabled by default.
-    if: ${{ always() && github.event_name == 'schedule' && needs.continuous-candidate.result == 'success' && needs.continuous-candidate.outputs.candidate_built == 'true' && vars.CONTINUOUS_PUBLICATION_ENABLED == 'true' }}
+    if: ${{ always() && github.event_name == 'schedule' && needs.continuous-candidate.result == 'success' && needs.continuous-candidate.outputs.candidate_built == 'true' && vars.CONTINUOUS_PUBLICATION_ENABLED == 'true' && vars.AUTOMATIC_LIFECYCLE_ENABLED != 'true' }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     permissions:
@@ -356,4 +365,73 @@ jobs:
           name: ci-v2-continuous-publication-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/continuous-publication/
           if-no-files-found: error
+          retention-days: 30
+
+  automatic-parent-writer:
+    needs: continuous-candidate
+    if: ${{ always() && github.event_name == 'schedule' && needs.continuous-candidate.result == 'success' && needs.continuous-candidate.outputs.candidate_built == 'true' && vars.AUTOMATIC_LIFECYCLE_ENABLED == 'true' && vars.CONTINUOUS_PUBLICATION_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    environment: ci-v2-audit-writer
+    permissions:
+      contents: write
+      actions: read
+    env:
+      PYTHONHASHSEED: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+      GIT_TERMINAL_PROMPT: '0'
+      CONTINUOUS_BUILD_DEPLOYMENT_JSON: ${{ vars.CONTINUOUS_BUILD_DEPLOYMENT_JSON }}
+      CONTINUOUS_BUILD_DEPLOYMENT_SHA256: ${{ vars.CONTINUOUS_BUILD_DEPLOYMENT_SHA256 }}
+      AUTOMATIC_LIFECYCLE_ENABLED: ${{ vars.AUTOMATIC_LIFECYCLE_ENABLED }}
+      AUTOMATIC_LIFECYCLE_POLICY_PATH: ${{ vars.AUTOMATIC_LIFECYCLE_POLICY_PATH }}
+      AUTOMATIC_LIFECYCLE_POLICY_SHA256: ${{ vars.AUTOMATIC_LIFECYCLE_POLICY_SHA256 }}
+    steps:
+      - name: Check out the exact protected workflow commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Select frozen interpreter
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12.3'
+          architecture: arm64
+      - name: Prepare pinned scientific verification runtime before credential access
+        run: |
+          git -c credential.helper= clone --no-checkout https://github.com/Consiliency/treesitter-chunker.git tools/treesitter-chunker
+          git -C tools/treesitter-chunker checkout --detach fb70922076c773d1865176329a03f67ff893fd90
+          python -m venv tools/treesitter-chunker/.venv
+          tools/treesitter-chunker/.venv/bin/python -m pip install -r configs/ci_v2_parser_requirements.txt
+          tools/treesitter-chunker/.venv/bin/python -m pip install -c configs/ci_v2_parser_requirements.txt -e tools/treesitter-chunker
+      - name: Verify scheduled policy, completed producer and effective protections before key access
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: tools/treesitter-chunker/.venv/bin/python -B scripts/automatic_lifecycle.py pre-token --work "$RUNNER_TEMP/automatic-pre-token"
+      - name: Mint only the dedicated repository installation token
+        id: app-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
+        with:
+          app-id: '5855475'
+          private-key: ${{ secrets.CI_V2_AUDIT_APP_PRIVATE_KEY }}
+          owner: XiangruZhang007
+          repositories: SPHinXsistant-CI-Test
+          permission-contents: write
+          skip-token-revoke: 'false'
+          github-api-url: https://api.github.com
+      - name: Verify original scientific evidence, publish admitted Release and advance derived Parent once
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PARENT_AUTHORITY_AUDIT_TOKEN: ${{ steps.app-token.outputs.token }}
+          ACTUAL_WRITER_INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
+        run: tools/treesitter-chunker/.venv/bin/python -B scripts/automatic_lifecycle.py advance --work "$RUNNER_TEMP/automatic-parent"
+      - name: Preserve sanitized automatic lifecycle receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-v2-automatic-parent-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/automatic-parent/result.json
+            ${{ runner.temp }}/automatic-parent/publication/publication-state.json
+            ${{ runner.temp }}/automatic-pre-token/result.json
+          if-no-files-found: warn
           retention-days: 30
