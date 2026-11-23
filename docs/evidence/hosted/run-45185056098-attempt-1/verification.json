@@ -1,0 +1,119 @@
+{
+  "HTTP_server_started": false,
+  "LLM_calls": 0,
+  "application": {
+    "application_closed": true,
+    "callbacks_share_assistant": true,
+    "complete_records_equal": true,
+    "corpus_path": "/home/runner/work/_temp/candidate-consumer-i7wy61s7/candidate-run-3kcuqu15/candidate/corpus.jsonl",
+    "isolation": {
+      "capabilities": "ALL_ZERO",
+      "external_route_probe": "ENETUNREACH",
+      "gid": 1001,
+      "interfaces": [
+        "lo"
+      ],
+      "no_new_privs": true,
+      "separate_network_namespace": true,
+      "uid": 1001
+    },
+    "pid": 2813,
+    "records": 12123,
+    "retrieval": [
+      {
+        "query": "How does SPHinXsim migrate_legacy_configuration preserve the saved document?",
+        "results": [
+          {
+            "chunk_id": "d5e0de43d804b1790811c5d1295b13ac3c957afb",
+            "excerpt": "def migrate_legacy_configuration(payload):\n    \"\"\"Return an editable copy, leaving the caller's saved document intact.\"\"\"\n    if not isinstance(payload, dict):\n        raise ValueError(\"Configuration must be a JSON object\")\n    payload = deepcopy(payload)\n    generation = payload.get(\"particle_generation\")\n    if isinstance(generation, dict) and {\"settings\", \"build_and_run\"} & generation.keys():\n        if set(generation) != {\"settings\", \"build_and_run\"}:\n            raise ValueError(\"particle_generation mixes legacy settings with current or unknown fields\")\n        if generation[\"build_and_run\"] is not True:\n            raise ValueError(\"Disabled legacy particle generation requires an expli",
+            "rank": 1,
+            "score": 89.9246261542927,
+            "source_path": "repos/SPHinXsim/sphinxsim/config/migrations.py"
+          },
+          {
+            "chunk_id": "dce41a0e5f9ff9e188b2e12818d7986a8b06d82a",
+            "excerpt": "def test_ambiguous_legacy_generation_preserves_the_saved_file(tmp_path, problem):\n    source = Path(__file__).parent / \"test_simulation/test_2d_simulation/data/column_collapse.json\"\n    payload = json.loads(source.read_text(encoding=\"utf-8\"))\n    generation = payload[\"particle_generation\"]\n    payload[\"particle_generation\"] = {\"build_and_run\": problem != \"disabled\", \"settings\": generation}\n    if problem == \"mixed\":\n        payload[\"particle_generation\"][\"bodies\"] = generation[\"bodies\"]\n    path = tmp_path / \"case.json\"\n    original = json.dumps(payload).encode(\"utf-8\")\n    path.write_bytes(original)\n\n    with pytest.raises(ValueError, match=\"legacy\"):\n        WorkbenchDocument(path)\n\n    as",
+            "rank": 2,
+            "score": 43.98943881113232,
+            "source_path": "repos/SPHinXsim/tests/test_workbench.py"
+          },
+          {
+            "chunk_id": "doc-a4435d57eb0849eb03c6bb71e82aa0c1ef610895e7f7179b8f676f042e24088e",
+            "excerpt": "## How CI behaves\n\nCI runs the mocked tests everywhere and skips the live Ollama cases automatically. This keeps the pipeline stable while still validating the example workflow and the Ollama adapter logic that does not require a live server.\n\n",
+            "rank": 3,
+            "score": 42.55261466505276,
+            "source_path": "repos/SPHinXsim/docs/llm-testing.md"
+          },
+          {
+            "chunk_id": "02c1c2c2358d21e26e2f7084458f822bc9aa0088",
+            "excerpt": "class ContinuumDynamicsSolverConfig(BaseModel):\n    acoustic_cfl: float = Field(default=0.4, gt=0)\n    advection_cfl: float = Field(default=0.2, gt=0)\n    # These controls apply to J2Plasticity. PlasticContinuum\n    # removes them during cross-validation because it does not build the\n    # corresponding correction, repulsion, shear, or hourglass dynamics.\n    linear_correction_matrix_coeff: Optional[float] = 0.5\n    contact_numerical_damping: Optional[float] = 0.5\n    shear_stress_damping: Optional[float] = 0.0\n    hourglass_factor: Optional[float] = 2.0\n    plastic_riemann_dissipation_factor: Optional[float] = Field(default=None, gt=0)",
+            "rank": 4,
+            "score": 39.729334374123496,
+            "source_path": "repos/SPHinXsim/sphinxsim/config/schemas.py"
+          },
+          {
+            "chunk_id": "8fd8ffc17a6681418d55e031cd85b6c7b9ffceee",
+            "excerpt": "def document(tmp_path, request):\n    source = Path(__file__).parent / \"test_simulation/test_2d_simulation/data/column_collapse.json\"\n    case = tmp_path / \"case.json\"\n    case.write_bytes(source.read_text(encoding=\"utf-8\").replace(\"\\n\", request.param).encode(\"utf-8\"))\n    return WorkbenchDocument(case)",
+            "rank": 5,
+            "score": 38.37810071700192,
+            "source_path": "repos/SPHinXsim/tests/test_workbench.py"
+          }
+        ],
+        "top_k": 5
+      }
+    ],
+    "retriever_class": "src.retrieval_v1.RetrievalV1",
+    "sha256": "8d989e543a2a25d779ad21fe9893848b65169c8502c0119c324d42536d4ca7e2"
+  },
+  "evidence": {
+    "P8": "BLOCKED",
+    "candidate_id": "sha256-76105a0d7e33375966aa09ab0bcf00f035055c0c0ffb96f5f18d6fbca63813b8",
+    "parity": "PARITY_PASS",
+    "records": 12123,
+    "sealed_R2": "VERIFIED / NO_FRESH_REPLAY"
+  },
+  "frozen_runtime": {
+    "P2_fingerprint": "7f66fe80e92d7263d5147d4fea551855184af75829f5b62993eb162acceb0cd8",
+    "R2_fingerprint": "1b21c01ef077549c60ba17109cc9381d1172b6e483c707c146cb7d80bcaa3f6d",
+    "hosted_validation": "PENDING_HOSTED_EVIDENCE",
+    "local_runtime": "VERIFIED",
+    "machine": "aarch64",
+    "python": "3.12.3"
+  },
+  "notices": "VERIFIED_SOURCE_AND_LICENSE_BINDINGS",
+  "original_execution": "LOCAL_RESEARCH_EXECUTION / HOSTED_NOT_RUN",
+  "production_promotion": "NOT_AUTHORIZED",
+  "restrictions": [
+    "QUALITY_REVIEW_REQUIRED",
+    "Q1_NOT_QUALIFIED_FOR_VERSION_PAIR",
+    "P8_BLOCKED",
+    "REGISTRATION_ONLY",
+    "PRODUCTION_NOT_AUTHORIZED"
+  ],
+  "review_sha256": "c5a060a2d4e2fb3232ad0dbfa9c63b040277406190972099306616fdf8f4ed83",
+  "scientific_verification": "NO_FRESH_REPLAY",
+  "scope": "RESEARCH_LOADING_ONLY",
+  "status": "RESEARCH_CANDIDATE_GRADIO_VERIFIED",
+  "subject": {
+    "base_source_state": "sha256-96d84d8f4a25c8a49e77aadca9d6a8accc247153bb7e0645dbf443ce71c6c151",
+    "base_upstreams": {
+      "SPHinXsim": "9cdae783e3ef3f8926c2174a0db89e96846befad",
+      "SPHinXsys": "4e686ee357de1cb798ac47eb760dd79e2fb407ff"
+    },
+    "build_fingerprint": "7f66fe80e92d7263d5147d4fea551855184af75829f5b62993eb162acceb0cd8",
+    "build_policy_sha256": "299aa0fd6925d9224432ddc474ec2f0e66edad89fbb1d031350a7b413bd68727",
+    "candidate_id": "sha256-76105a0d7e33375966aa09ab0bcf00f035055c0c0ffb96f5f18d6fbca63813b8",
+    "corpus_sha256": "8d989e543a2a25d779ad21fe9893848b65169c8502c0119c324d42536d4ca7e2",
+    "corpus_size": 27057586,
+    "orchestration_fingerprint": "b0b43411aef4d716a15a2f0a794071523fbb3c260dc4cb3fc9b2736eed9e1ac1",
+    "parent_id": "sha256-798d0d1284c7dbba06d5788a062973bf7290cbbfdef28150037371fa78b7188a",
+    "records": 12123,
+    "run_manifest_sha256": "4dcd368beb47ea141d607bf9ca15afaadc528eb7b6b39cd337b7f189cb21e995",
+    "target_source_state": "sha256-f6b3c85e6500d1edb6978f493ec462ac51a36fe506dac614bcc83c9e876e4394",
+    "target_upstreams": {
+      "SPHinXsim": "601343617a339a731d7484f6f43b5aaffb19f61b",
+      "SPHinXsys": "64d6069f7469c4171f7807e7e3118a6d7dee06a5"
+    }
+  },
+  "temporary_run_and_application_cleaned": true
+}
