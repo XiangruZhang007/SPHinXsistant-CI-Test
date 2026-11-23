@@ -10,7 +10,7 @@ from .parent_r2_anchor import qualify_parent_anchor
 
 FILES = ('src/schema2_workflow.py', 'src/trusted_snapshot.py', 'src/regression_attribution.py',
          'scripts/ci_v2_schema2_research.py', 'configs/ci_v2_schema2_trusted_baselines.json',
-         'docs/ci_v2_p5a_2_design.md', 'src/parent_r2_anchor.py')
+         'docs/ci_v2_p5a_2_design.md', 'src/parent_r2_anchor.py', 'src/q1_current_inputs.py')
 
 
 def _remote_baseline_selection(ref):
@@ -112,13 +112,17 @@ def _verification(project, candidate, full, directory, quality, lock, output):
     return spec, rows
 
 
-def diagnostics(project, output, spec, parent_rows, target_rows, bindings, *, q1_inputs=None, q1_sha=None):
+def diagnostics(project, output, spec, parent_rows, target_rows, bindings, *, q1_inputs=None, q1_sha=None, automatic=False):
     """Diagnostic failures cannot override mandatory execution/scoring checks."""
     from . import regression_attribution as attribution, version_aware_evidence as q
     report = None
     status = {'status': 'Q1_NOT_QUALIFIED_FOR_VERSION_PAIR'}
-    if q1_inputs is not None:
+    if q1_inputs is not None or automatic:
         try:
+            q.need((q1_inputs is None) == (q1_sha is None), 'Q1 inputs and checksum must be paired')
+            if q1_inputs is None:
+                from .q1_current_inputs import prepare
+                q1_inputs, q1_sha = prepare(project, output, bindings)
             possible = q.generate(project, q1_inputs, q1_sha)
             p = possible['base']; t = possible['target']
             required = {'base_source_state': p['source_state_id'], 'target_source_state': t['source_state_id'],
@@ -159,6 +163,8 @@ def run_local(project, archive, base_source, target_source, output, ref, expecte
     from .research_quality import evaluate_quality
     project, archive, base_source, target_source, output, policy_path, parent_rows_path = map(Path,
         (project, archive, base_source, target_source, output, policy_path, parent_rows_path))
+    c.need((q1_inputs is None) == (q1_sha is None), 'UNSAFE_INPUT',
+           'q1_inputs and q1_sha must be provided together')
     lock = read_json(c.LOCK)
     runtime = c.frozen_runtime(project, lock)
     trust.validate_reference(ref, expected_ref_sha)
@@ -205,7 +211,7 @@ def run_local(project, archive, base_source, target_source, output, ref, expecte
         'base_rows_sha256': file_digest(parent_rows_path), 'target_rows_sha256': quality['raw_results_sha256'],
         'four_artifact_parity': parity, 'P4_1_original_evidence': 'VERIFIED_LAYERS_A_B_C'}
     qstatus, attributed = diagnostics(project, output, spec, parent_rows, rows['incremental'], bindings,
-                                     q1_inputs=q1_inputs, q1_sha=q1_sha)
+                                     q1_inputs=q1_inputs, q1_sha=q1_sha, automatic=True)
     # Validate mandatory inputs again after optional diagnostics; never let a
     # diagnostic implementation weaken or replace these gates.
     u.verify(project, output / 'candidate', fp)

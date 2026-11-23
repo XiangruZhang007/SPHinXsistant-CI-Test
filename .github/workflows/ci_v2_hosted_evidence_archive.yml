@@ -1,0 +1,62 @@
+name: Archive Hosted Research Verification Evidence
+
+on:
+  workflow_run:
+    workflows: [CI V2 Research Candidate Gradio Loading]
+    types: [completed]
+    branches: [ci-upstream-refresh]
+
+permissions: {}
+
+concurrency:
+  group: hosted-evidence-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: >-
+      github.repository == 'XiangruZhang007/SPHinXsistant-CI-Test' &&
+      github.repository_id == '1455203884' && github.run_attempt == 1 &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.run_attempt == 1 &&
+      github.event.workflow_run.head_repository.id == 1455203884 &&
+      (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure')
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      manifest_sha256: ${{ steps.validate.outputs.manifest_sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -I -S -B scripts/archive_hosted_verification.py validate --run-id "$SOURCE_RUN_ID" --output "$RUNNER_TEMP/validated-hosted-evidence"
+
+  propose:
+    needs: validate
+    if: needs.validate.result == 'success'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          EXPECTED_MANIFEST_SHA256: ${{ needs.validate.outputs.manifest_sha256 }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -I -S -B scripts/archive_hosted_verification.py propose --run-id "$SOURCE_RUN_ID" --expected-manifest-sha256 "$EXPECTED_MANIFEST_SHA256" --output "$RUNNER_TEMP/proposed-hosted-evidence"

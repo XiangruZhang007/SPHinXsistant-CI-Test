@@ -74,4 +74,4 @@ jobs:
           name: candidate-gradio-loading-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate-gradio-verification/verification.json
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 30

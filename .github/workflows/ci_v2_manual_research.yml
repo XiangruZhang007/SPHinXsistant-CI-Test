@@ -25,7 +25,7 @@ on:
         default: dceacd4e509a8592b802cf44bb2885bea7ddfdb3
         type: string
       q1_transport_config:
-        description: Optional reviewed Q1 transport config in the checked-out configs/ directory
+        description: Optional reviewed Q1 override; otherwise diagnose the current verified version pair automatically
         required: false
         default: ''
         type: string

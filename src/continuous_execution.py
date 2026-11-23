@@ -28,7 +28,7 @@ FORMAT = 'continuous-research-candidate-v1'
 PROJECTION = 'continuous-evaluator-projection-v1'
 SYNTHETIC = 'CONTROLLED_GIT_FIXTURE'
 FILES = ('src/continuous_execution.py', 'src/continuous_build_policy.py',
-         'src/ci_v2_research.py', 'src/schema2_workflow.py', 'src/trusted_snapshot.py',
+         'src/ci_v2_research.py', 'src/schema2_workflow.py', 'src/q1_current_inputs.py', 'src/trusted_snapshot.py',
          'src/parent_r2_anchor.py', 'src/owner_manual_baseline_approval.py',
          'src/trusted_baseline_registration.py', 'src/trusted_parent_selection.py')
 EVIDENCE = ('assessment.json', 'policy-original.json', 'registry.json', 'reference.json',
