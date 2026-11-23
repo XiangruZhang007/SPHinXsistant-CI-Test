@@ -60,7 +60,8 @@ class GitHubRead:
 
 def checkout(project, revision, files):
     critical = {WORKFLOW, '.github/CODEOWNERS', 'src/hosted_parent_authority_transition.py',
-                'scripts/parent_authority_writer_prepare.py', 'scripts/parent_authority_writer_gate.py'}
+                'scripts/parent_authority_writer_prepare.py', 'scripts/parent_authority_writer_gate.py',
+                'scripts/parent_authority_writer_execute.py'}
     need(isinstance(files, dict) and critical <= files.keys(), 'WRITER_CODE_MANIFEST_INCOMPLETE')
     for name, pin in files.items():
         need(isinstance(name, str) and not Path(name).is_absolute()

@@ -168,3 +168,17 @@ jobs:
           PARENT_AUTHORITY_AUDIT_TOKEN: ${{ steps.app-token.outputs.token }}
           ACTUAL_WRITER_INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
         run: python -I -S -B scripts/parent_authority_writer_gate.py --verify-token
+      - name: Execute gated durable isolated transaction
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRUSTED_RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PARENT_AUTHORITY_AUDIT_TOKEN: ${{ steps.app-token.outputs.token }}
+          ACTUAL_WRITER_INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
+        run: python -I -S -B scripts/parent_authority_writer_execute.py
+      - name: Retain sanitized isolated Writer evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: parent-authority-writer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/parent-authority-writer-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: warn

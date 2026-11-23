@@ -53,8 +53,16 @@ class WriterWorkflowTests(unittest.TestCase):
         self.assertLess(next(i for i,s in enumerate(steps) if s.get('run')=='python -I -S -B scripts/parent_authority_writer_gate.py'),steps.index(mint))
         self.assertNotIn('PARENT_AUTHORITY_AUDIT_TOKEN',writer['env'])
         self.assertNotIn('outputs',writer)
-        self.assertEqual(steps[-1]['env']['GH_TOKEN'],'${{ secrets.GITHUB_TOKEN }}')
-        self.assertIn('steps.app-token.outputs.token',steps[-1]['env']['PARENT_AUTHORITY_AUDIT_TOKEN'])
+        privileged=[s for s in steps if 'PARENT_AUTHORITY_AUDIT_TOKEN' in s.get('env',{})]
+        self.assertEqual(len(privileged),2)
+        for step in privileged:
+            self.assertEqual(step['env']['GH_TOKEN'],'${{ secrets.GITHUB_TOKEN }}')
+            self.assertIn('steps.app-token.outputs.token',step['env']['PARENT_AUTHORITY_AUDIT_TOKEN'])
+        execute=next(s for s in steps if s.get('run')=='python -I -S -B scripts/parent_authority_writer_execute.py')
+        self.assertEqual(execute['env']['TRUSTED_RELEASE_TOKEN'],'${{ secrets.GITHUB_TOKEN }}')
+        self.assertGreater(steps.index(execute),steps.index(mint))
+        self.assertEqual(steps[-1]['if'],'always()')
+        self.assertNotIn('env',steps[-1])
         self.assertFalse(any(s.get('continue-on-error') for s in steps))
 
     def test_original_manual_contract_preserved_all_shell_and_action_pins(self):
@@ -228,7 +236,8 @@ class WriterGateTests(unittest.TestCase):
     def test_real_checkout_checks_commit_tracked_hashes_and_untracked_code(self):
         files={}
         for name in (gate.WORKFLOW,'.github/CODEOWNERS','src/hosted_parent_authority_transition.py',
-                     'scripts/parent_authority_writer_prepare.py','scripts/parent_authority_writer_gate.py'):
+                     'scripts/parent_authority_writer_prepare.py','scripts/parent_authority_writer_gate.py',
+                     'scripts/parent_authority_writer_execute.py'):
             p=self.root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('synthetic\n')
             files[name]=hashlib.sha256(p.read_bytes()).hexdigest()
         def git(*a):return subprocess.check_output(['git','--no-optional-locks','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-C',str(self.root),*a],stderr=subprocess.PIPE)

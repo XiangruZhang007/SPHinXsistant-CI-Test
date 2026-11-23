@@ -11,7 +11,6 @@ from urllib.parse import quote
 
 from . import ci_v2_research as c, schema2_workflow as workflow
 from . import trusted_snapshot as trust, trusted_parent_selection as selection
-from . import upstream_provenance as provenance
 from .corpus_snapshot import checked_file, digest, file_digest, read_json
 from .owner_manual_baseline_approval import GitHubCLI, _candidate_binding
 from .trusted_baseline_registration import entry_kind, REGISTRATION_ONLY
@@ -155,6 +154,7 @@ def _source_refs(policy, targets, base_proofs, target_proofs):
     Mock GitHubCLI only in tests. Git object proofs alone do not prove publication
     or branch membership. Saved observations support audit, not fresh authority.
     """
+    from . import upstream_provenance as provenance
     client = GitHubCLI(); result = {}
     for repo, scope in policy['upstreams'].items():
         full_name = scope['url'].removeprefix('https://github.com/').removesuffix('.git')
@@ -198,6 +198,7 @@ def assess_scope(project, registry_path, policy_path, *, expected_policy_sha256,
     restoration, extraction, replay, approval or Registry changes occur here.
     Only API GETs and read-only Git/source inventory checks may execute.
     """
+    from . import upstream_provenance as provenance
     project = Path(project)
     c.validate_request('formal', 'continuous-scope', revisions)
     policy = load_policy(project, policy_path, expected_policy_sha256)
