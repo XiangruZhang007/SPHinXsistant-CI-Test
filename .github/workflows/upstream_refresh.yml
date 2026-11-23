@@ -82,21 +82,25 @@ jobs:
           retention-days: 30
 
       - name: Clone upstream source repositories
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.build_continuous_ci_v2 && !inputs.build_ci_v2) }}
         run: |
           git clone --branch master https://github.com/Xiangyu-Hu/SPHinXsys.git repos/SPHinXsys
           git clone --branch main https://github.com/Xiangyu-Hu/SPHinXsim.git repos/SPHinXsim
 
       - name: Clone pinned treesitter-chunker
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.build_continuous_ci_v2 && !inputs.build_ci_v2) }}
         run: |
           git clone https://github.com/Consiliency/treesitter-chunker.git tools/treesitter-chunker
           git -C tools/treesitter-chunker checkout --detach fb70922076c773d1865176329a03f67ff893fd90
 
       - name: Install isolated chunk-generation runtime
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.build_continuous_ci_v2 && !inputs.build_ci_v2) }}
         run: |
           python -m venv tools/treesitter-chunker/.venv
           tools/treesitter-chunker/.venv/bin/python -m pip install -e tools/treesitter-chunker
 
       - name: Generate candidate corpus
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.build_continuous_ci_v2 && !inputs.build_ci_v2) }}
         run: |
           candidate_dir="${{ runner.temp }}/sphinxsistant_candidate"
           PYTHONDONTWRITEBYTECODE=1 tools/treesitter-chunker/.venv/bin/python scripts/generate_source_chunks_v1.py \
@@ -111,6 +115,7 @@ jobs:
             --combined-summary-output "$candidate_dir/source_chunks_v1_combined_summary.json"
 
       - name: Run deterministic retrieval regression
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.build_continuous_ci_v2 && !inputs.build_ci_v2) }}
         run: |
           candidate_dir="${{ runner.temp }}/sphinxsistant_candidate"
           PYTHONDONTWRITEBYTECODE=1 tools/treesitter-chunker/.venv/bin/python scripts/retrieve_v1.py \
@@ -119,6 +124,7 @@ jobs:
             --write-initial-validation
 
       - name: Upload candidate refresh artifacts
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.build_continuous_ci_v2 && !inputs.build_ci_v2) }}
         uses: actions/upload-artifact@v4
         with:
           name: sphinxsistant-candidate-refresh

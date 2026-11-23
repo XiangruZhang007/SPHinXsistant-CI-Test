@@ -254,8 +254,15 @@ with patch.object(w, 'execute_plan', side_effect=record):
         added = {'ci_v2_route'}
         steps = [s for s in self.source['steps'] if s.get('id') not in added
                  and s.get('name') != 'Preserve detection and CI V2 routing evidence']
-        # Recorded from the original V1 steps; portable to shallow/migrated repos.
-        self.assertEqual(digest(steps), '8e55a79c35626863832e9fdf91b61adff9edbc732ba9cd7d2099650437ffdef2')
+        # Strip only the reviewed manual-Continuous guards, after checking each.
+        # Preserve the original V1 payload digest rather than repinning it.
+        original_steps = []
+        for step in steps:
+            original = dict(step)
+            if step['name'] in ManualContinuousIsolationTests.LEGACY:
+                self.assertEqual(original.pop('if', None), ManualContinuousIsolationTests.GUARD)
+            original_steps.append(original)
+        self.assertEqual(digest(original_steps), '8e55a79c35626863832e9fdf91b61adff9edbc732ba9cd7d2099650437ffdef2')
         self.assertEqual(self.source['runs-on'], 'ubuntu-latest')
         self.assertEqual(self.doc['permissions'], {'contents': 'read'})
         events = self.doc.get('on',self.doc.get(True))
@@ -296,6 +303,114 @@ with patch.object(w, 'execute_plan', side_effect=record):
         manual=yaml.safe_load((P/'.github/workflows/ci_v2_manual_research.yml').read_text())
         select=lambda steps:next(s['run'] for s in steps if s['name']=='Prepare pinned extraction runtime')
         self.assertEqual(select(self.build['steps']),select(manual['jobs']['candidate']['steps']))
+
+
+class ManualContinuousIsolationTests(unittest.TestCase):
+    """Routing checks inspect the actual YAML; they do not run a Hosted builder."""
+    LEGACY = (
+        'Clone upstream source repositories', 'Clone pinned treesitter-chunker',
+        'Install isolated chunk-generation runtime', 'Generate candidate corpus',
+        'Run deterministic retrieval regression', 'Upload candidate refresh artifacts')
+    GUARD = "${{ !(github.event_name == 'workflow_dispatch' && inputs.build_continuous_ci_v2 && !inputs.build_ci_v2) }}"
+
+    def setUp(self):
+        self.workflow = yaml.safe_load((P / '.github/workflows/upstream_refresh.yml').read_text())
+        self.jobs = self.workflow['jobs']
+        self.steps = self.jobs['candidate-refresh']['steps']
+
+    def assert_route(self, event, continuous=False, schema2=False, *, legacy_runs):
+        # Restricted evaluator for this one exact, typed-boolean GitHub expression.
+        # GitHub's implicit success() prerequisite remains in force, as before.
+        values = {'github.event_name': event,
+                  'inputs.build_continuous_ci_v2': continuous, 'inputs.build_ci_v2': schema2}
+        legacy = [s for s in self.steps if s['name'] in self.LEGACY]
+        self.assertEqual(tuple(s['name'] for s in legacy), self.LEGACY)
+        for step in legacy:
+            self.assertEqual(step.get('if'), self.GUARD)
+            expression = step['if'][3:-2].strip()
+            for key, value in values.items():
+                expression = expression.replace(key, repr(value))
+            expression = expression.replace('&&', ' and ').replace('!', ' not ').strip()
+            self.assertEqual(eval(expression, {'__builtins__': {}}, {}), legacy_runs, step['name'])
+        detection = next(s for s in self.steps if s['name'] == 'Check configured upstream branches')
+        preflight = next(s for s in self.steps if s.get('id') == 'ci_v2_route')
+        self.assertNotIn('if', detection)
+        self.assertNotIn('if', preflight)
+        receipt = next(s for s in self.steps if s['name'] == 'Preserve detection and CI V2 routing evidence')
+        self.assertEqual(receipt['if'], 'always()')
+        self.assertLess(self.steps.index(receipt), self.steps.index(legacy[0]))
+
+    def test_manual_continuous_only_skips_exactly_six_legacy_steps(self):
+        self.assert_route('workflow_dispatch', True, False, legacy_runs=False)
+
+    def test_manual_schema2_only_preserves_legacy_steps(self):
+        self.assert_route('workflow_dispatch', False, True, legacy_runs=True)
+
+    def test_default_manual_preserves_legacy_steps(self):
+        events = self.workflow.get('on', self.workflow.get(True))
+        inputs = events['workflow_dispatch']['inputs']
+        self.assertIs(inputs['build_ci_v2']['default'], False)
+        self.assertIs(inputs['build_continuous_ci_v2']['default'], False)
+        self.assert_route('workflow_dispatch', legacy_runs=True)
+
+    def test_both_inputs_false_preserves_legacy_steps(self):
+        self.assert_route('workflow_dispatch', False, False, legacy_runs=True)
+
+    def test_both_inputs_true_preserves_legacy_steps(self):
+        self.assert_route('workflow_dispatch', True, True, legacy_runs=True)
+
+    def test_schedule_preserves_legacy_steps(self):
+        self.assert_route('schedule', legacy_runs=True)
+
+    def test_no_other_route_can_skip_legacy_steps(self):
+        for event in ('schedule', 'push', 'workflow_dispatch'):
+            for continuous in (False, True):
+                for schema2 in (False, True):
+                    with self.subTest(event=event, continuous=continuous, schema2=schema2):
+                        self.assert_route(event, continuous, schema2,
+                            legacy_runs=not (event == 'workflow_dispatch' and continuous and not schema2))
+
+    def test_genuine_dependency_survives_skipped_or_failed_legacy_work(self):
+        job = self.jobs['continuous-candidate']
+        self.assertEqual(job['needs'], 'candidate-refresh')
+        self.assertTrue(job['if'].startswith('${{ always() &&'))
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.build_continuous_ci_v2 && !inputs.build_ci_v2", job['if'])
+        self.assertNotIn('needs.candidate-refresh.result', job['if'])
+        self.assertEqual(job['runs-on'], 'ubuntu-24.04-arm')
+        self.assertEqual(job['permissions'], {'contents': 'read', 'actions': 'read'})
+        self.assertNotIn('if', self.jobs['candidate-refresh'])
+        # No explicit status override: each legacy guard retains implicit success().
+        for step in self.steps:
+            if step['name'] in self.LEGACY:
+                self.assertNotIn('always()', step['if'])
+                self.assertNotIn('continue-on-error', step)
+
+    def test_detection_upload_and_authenticated_same_attempt_download_match(self):
+        uploaded = next(s for s in self.steps if s['name'] == 'Preserve detection and CI V2 routing evidence')
+        download = next(s for s in self.jobs['continuous-candidate']['steps']
+                        if s['name'] == "Download only this attempt's detection evidence")
+        expected = 'ci-v2-update-preflight-${{ github.run_id }}-${{ github.run_attempt }}'
+        self.assertEqual(uploaded['with']['name'], expected)
+        self.assertEqual(download['with']['name'], expected)
+        self.assertEqual(download['with']['repository'], '${{ github.repository }}')
+        self.assertEqual(download['with']['run-id'], '${{ github.run_id }}')
+        self.assertEqual(download['with']['github-token'], '${{ secrets.GITHUB_TOKEN }}')
+        self.assertEqual(download['with']['digest-mismatch'], 'error')
+        self.assertEqual(download['with']['path'], '${{ runner.temp }}/continuous-detection')
+        shell = next(s['run'] for s in self.jobs['continuous-candidate']['steps'] if s.get('id') == 'continuous')
+        self.assertIn('--detection "$RUNNER_TEMP/continuous-detection/sphinxsistant_candidate/upstream_status.json"', shell)
+        self.assertNotIn('source_chunks_v1', shell)
+        self.assertEqual(self.jobs['candidate-refresh']['outputs']['transfer'], '${{ steps.ci_v2_route.outputs.transfer }}')
+
+    def test_manual_continuous_does_not_enable_other_build_or_publication(self):
+        schema2 = self.jobs['candidate']['if']
+        self.assertIn('inputs.build_ci_v2 && !inputs.build_continuous_ci_v2', schema2)
+        self.assertIn("github.event_name == 'schedule'", self.jobs['continuous-schedule-preflight']['if'])
+        publication = self.jobs['publish-continuous-candidate']['if']
+        self.assertIn("github.event_name == 'schedule'", publication)
+        self.assertIn("vars.CONTINUOUS_PUBLICATION_ENABLED == 'true'", publication)
+        events = self.workflow.get('on', self.workflow.get(True))
+        self.assertEqual(events['schedule'], [{'cron': '0 6 * * 1'}])
 
 
 if __name__ == '__main__':
