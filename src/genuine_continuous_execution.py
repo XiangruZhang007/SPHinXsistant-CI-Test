@@ -34,7 +34,9 @@ EXTRA_EVIDENCE = {'deployment.json', 'authority-policy.json', 'authorization-con
 FILES = ('src/genuine_continuous_execution.py', 'scripts/run_continuous_ci_v2.py',
          'scripts/prepare_ci_v2_update.py', '.github/workflows/upstream_refresh.yml',
          'src/scheduled_construction.py', 'src/continuous_completion.py',
-         'src/candidate_release_archive.py', 'src/historical_candidate_archive.py', 'scripts/publish_continuous_candidate.py')
+         'src/candidate_release_archive.py', 'src/historical_candidate_archive.py', 'scripts/publish_continuous_candidate.py',
+         'src/version_aware_evidence.py', 'scripts/version_aware_evidence.py',
+         'tests/test_version_aware_evidence.py', 'docs/version_aware_evidence_v1.md')
 LIMITS = {**c.RESTRICTIONS, 'automatic_registration': False,
           'Q1': 'Q1_NOT_QUALIFIED_FOR_VERSION_PAIR', 'P8': 'BLOCKED'}
 
@@ -511,6 +513,118 @@ def _result(metadata):
         'trusted_parent_eligibility': 'NOT_GRANTED', **LIMITS, 'scheduled_execution': identity['scheduled_execution']}
 
 
+
+def _supplement_binding(project, root, pins):
+    """Only use this view AFTER mandatory verify_package with caller-owned pins."""
+    meta = read_json(checked_file(root, 'candidate/genuine-candidate.json'))
+    i = meta['identity']; parent = i['parent']
+    bindings = {'build_fingerprint': i['build_fingerprint'], 'parent_id': parent['node_id'],
+        'candidate_id': pins['expected_candidate_id'], 'base_source_state': parent['source_state'],
+        'target_source_state': i['target_source_state'], 'base_upstreams': parent['upstreams'],
+        'target_upstreams': i['upstreams'], 'base_corpus_sha256': parent['corpus_sha256'],
+        'target_corpus_sha256': file_digest(checked_file(root, 'candidate/corpus.jsonl')),
+        'base_rows_sha256': file_digest(checked_file(root, 'evidence/parent-rows.json')),
+        'target_rows_sha256': file_digest(checked_file(root, 'quality/incremental-raw-results.json')),
+        'benchmark_sha256': file_digest(checked_file(project, ev.BENCHMARK))}
+    package = {'base_manifest_sha256': file_digest(checked_file(root, 'parent/checksums.json')),
+        'target_manifest_sha256': pins['expected_manifest_sha256'],
+        'base_package_checksum': parent['package_checksum']}
+    identity = {'candidate_id': pins['expected_candidate_id'], 'candidate_format': meta['format'],
+        'parent': parent, 'generation': i['generation'], 'bindings': bindings,
+        'package_pins': package, 'execution_pins': dict(pins)}
+    return identity
+
+
+def supplementary_q1(project, delivery, pins):
+    """Post-seal/post-relocation diagnostic, never approval or part of the archive.
+
+    Mandatory package errors propagate. Diagnostic errors have explicit separate
+    receipts. No caller-supplied metadata can replace the mandatory seven pins.
+    """
+    from . import q1_current_inputs as inputs, version_aware_evidence as q
+    delivery = Path(delivery); root = delivery / 'run'
+    need(delivery.is_dir() and not delivery.is_symlink(), 'INVALID_SUPPLEMENT_OUTPUT')
+    verify_package(project, root, **pins, fresh_replay=False)
+    identity = _supplement_binding(project, root, pins)
+    targets = ('q1-auto-inputs.json', 'q1-report', 'q1-supplement.json')
+    need(all(not (delivery / n).exists() and not (delivery / n).is_symlink() for n in targets),
+         'SUPPLEMENT_ALREADY_EXISTS')
+    archive_sha = file_digest(checked_file(delivery, 'candidate.tar.gz'))
+    receipt = {'schema_version': 1, 'kind': 'continuous-q1-supplement',
+        'purpose': 'SUPPLEMENTARY_DIAGNOSIS_ONLY', **identity,
+        'original_archive_sha256': archive_sha, 'descriptor_sha256': None,
+        'report_id': None, 'report_sha256': None, 'report_checksums_sha256': None,
+        'q1_implementation_sha256': None, 'status': 'Q1_INPUT_QUALIFICATION_FAILED',
+        'stage': 'INPUT_QUALIFICATION', **q.RESTRICTIONS}
+    try:
+        need(identity['candidate_format'] in q.FORMAT_CONTINUOUS,
+             'Q1_UNSUPPORTED_CANDIDATE_FORMAT')
+        receipt['q1_implementation_sha256'] = digest(q.implementation(project))
+        manifest, checksum = inputs.prepare(project, root, identity['bindings'],
+            package_pins=identity['package_pins'], execution_pins=pins, output=delivery)
+        receipt['descriptor_sha256'] = checksum
+        receipt.update(stage='REPORT_GENERATION', status='Q1_REPORT_GENERATION_FAILED')
+        report = q.generate(project, manifest, checksum)
+        q.write_report(delivery / 'q1-report', report)
+        receipt.update(stage='REPORT_VERIFICATION', status='Q1_REPORT_VERIFICATION_FAILED')
+        verified = q.verify_report(project, manifest, checksum, delivery / 'q1-report')
+        need(verified['status'] == 'VERIFIED' and verified['report_id'] == report['report_id'],
+             'Q1_REPORT_VERIFICATION_FAILED')
+        receipt.update(status='QUALIFIED', stage='VERIFIED', report_id=report['report_id'],
+            report_sha256=file_digest(delivery / 'q1-report/version_aware_evidence_report.json'),
+            report_checksums_sha256=file_digest(delivery / 'q1-report/checksums.json'))
+    except Exception as error:
+        # Diagnostic failure never changes original result/attribution/score.
+        receipt['error_type'] = type(error).__name__
+        if 'UNSUPPORTED' in str(error) or 'Unsupported research-baseline Parent' in str(error):
+            receipt.update(status='Q1_UNSUPPORTED_FORMAT', stage='INPUT_QUALIFICATION')
+    # Preservation is mandatory even when the optional diagnostic fails.
+    verify_package(project, root, **pins, fresh_replay=False)
+    need(file_digest(checked_file(delivery, 'candidate.tar.gz')) == archive_sha,
+         'ORIGINAL_ARCHIVE_CHANGED')
+    write_json(delivery / 'q1-supplement.json', receipt)
+    if receipt['status'] == 'QUALIFIED':
+        verify_supplement(project, delivery, pins, file_digest(delivery / 'q1-supplement.json'))
+    return receipt
+
+
+def verify_supplement(project, delivery, pins, expected_receipt_sha256):
+    """Independent readback; pins AND raw receipt digest are caller trust inputs.
+
+    Never interpret a failed receipt as a verified/qualified diagnostic. Original
+    package integrity and report regeneration remain mandatory on every read.
+    """
+    from . import version_aware_evidence as q
+    delivery = Path(delivery); root = delivery / 'run'
+    verify_package(project, root, **pins, fresh_replay=False)
+    path = checked_file(delivery, 'q1-supplement.json')
+    need(scope._hash(expected_receipt_sha256) and file_digest(path) == expected_receipt_sha256,
+         'SUPPLEMENT_RECEIPT_MISMATCH')
+    actual = read_json(path); identity = _supplement_binding(project, root, pins)
+    expected = {'schema_version': 1, 'kind': 'continuous-q1-supplement',
+        'purpose': 'SUPPLEMENTARY_DIAGNOSIS_ONLY', **identity,
+        'original_archive_sha256': file_digest(checked_file(delivery, 'candidate.tar.gz')),
+        'descriptor_sha256': file_digest(checked_file(delivery, 'q1-auto-inputs.json')),
+        'report_sha256': file_digest(checked_file(delivery, 'q1-report/version_aware_evidence_report.json')),
+        'report_checksums_sha256': file_digest(checked_file(delivery, 'q1-report/checksums.json')),
+        'q1_implementation_sha256': digest(q.implementation(project)),
+        'report_id': read_json(checked_file(delivery, 'q1-report/version_aware_evidence_report.json'))['report_id'],
+        'status': 'QUALIFIED', 'stage': 'VERIFIED', **q.RESTRICTIONS}
+    need(actual == expected, 'SUPPLEMENT_BINDING_MISMATCH_OR_UNQUALIFIED')
+    descriptor = read_json(delivery / 'q1-auto-inputs.json')
+    # Do not let a self-consistent descriptor switch to some other sealed run.
+    need(descriptor['paths'] == {'run': 'run', 'base': 'run/parent', 'target': 'run/candidate',
+        'base_rows': 'run/evidence/parent-rows.json', 'target_rows': 'run/quality/incremental-raw-results.json'}
+        and descriptor['execution_pins'] == pins and descriptor['package_pins'] == identity['package_pins'],
+        'SUPPLEMENT_DESCRIPTOR_BINDING_MISMATCH')
+    verified = q.verify_report(project, delivery / 'q1-auto-inputs.json',
+        actual['descriptor_sha256'], delivery / 'q1-report')
+    need(verified['status'] == 'VERIFIED' and verified['report_id'] == actual['report_id'],
+         'SUPPLEMENT_REPORT_MISMATCH')
+    return {'status': 'VERIFIED', 'diagnostic_qualification': 'QUALIFIED',
+        'candidate_id': pins['expected_candidate_id'], 'report_id': actual['report_id'], **q.RESTRICTIONS}
+
+
 def execute(project, detection_path, work, output):
     """Real entry; absent deployment/identity authority blocks before downloads."""
     project, detection_path, work, output = map(Path, (project, detection_path, work, output))
@@ -630,4 +744,5 @@ def execute(project, detection_path, work, output):
     write_json(delivery / 'transport.json', transport)
     revalidate()
     output.mkdir(exist_ok=False); delivery.replace(output)
+    supplementary_q1(project, output, pins)
     return {**result, 'execution_authorization': authority['authority'], 'transport': transport}
