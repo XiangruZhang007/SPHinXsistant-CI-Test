@@ -512,6 +512,10 @@ class GenuineFormatTests(unittest.TestCase):
         # ORIGINAL pins by reconstructing the original contract, rather than
         # silently repinning sealed historical packages to today's code.
         historical = deepcopy(v1.contract(P))
+        # The sealed historical format predates the automatic-Q1 dependency.
+        historical['implementation'].pop('src/q1_current_inputs.py')
+        # Restore the adapter bytes from the reviewed pre-F deployment tree.
+        historical['implementation']['src/continuous_execution.py'] = '9954be0f719555209881ce8ed7c620d3469c60715aebc8f15c0dad506c9a521a'
         historical['implementation'].update({
             # Original Owner verifier bytes retained in checkpoint a276b709.
             'src/owner_manual_baseline_approval.py': 'e4640e57aa703732bf91b08da493892cd07e23f46f77e99b555c8c7e867b4051',

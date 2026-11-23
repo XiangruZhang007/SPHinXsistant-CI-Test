@@ -45,7 +45,7 @@ def main(argv=None):
     for name in ('key', 'expected-reference-sha256', 'expected-policy-sha256'):
         next_build.add_argument('--' + name, required=True)
     a = parser.parse_args(argv)
-    if a.command == 'execute-plan' and ((a.q1_inputs is None) != (a.q1_inputs_sha256 is None)):
+    if a.command in ('execute-plan', 'local') and ((a.q1_inputs is None) != (a.q1_inputs_sha256 is None)):
         parser.error('--q1-inputs and --q1-inputs-sha256 must be provided together')
     try:
         if a.command == 'build-next':
