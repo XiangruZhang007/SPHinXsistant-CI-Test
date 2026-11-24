@@ -100,7 +100,12 @@ def select(project,config,policy,client,work,store):
 def build(project,detection_path,work,output):
     project,work,output=map(Path,(project,work,output))
     config,_,config_sha=genuine.deployment()
-    authority=genuine._authority(project,Path(detection_path),config,config_sha)
+    policy=policy_api.load(project,config)
+    if policy['schema_version']==3:
+        from .native_runtime_contract import authority as authenticate
+    else:
+        authenticate=genuine._authority
+    authority=authenticate(project,Path(detection_path),config,config_sha)
     need(authority['workflow_run']['event']=='schedule' and config['schema_version']>=3,
          'AUTOMATIC_BUILD_REQUIRES_SCHEDULED_AUTHORITY')
     policy=policy_api.load(project,config)
@@ -110,18 +115,20 @@ def build(project,detection_path,work,output):
     genuine.scheduled.load(project,config);genuine.scheduled.mutex(project,config,authority)
     source._new_output(work,(project,output,detection_path));source._new_output(output,(project,work,detection_path));work.mkdir()
     client=completion.Client(config['repository'],os.environ.get('GH_TOKEN'))
-    store=derived.GitState(config['repository'],config['repository_id'],client.token)
+    store=derived.GitState(config['repository'],config['repository_id'],client.token,**({'ref':policy['derived_ref']} if policy['schema_version']==3 else {}))
     view,parent,folder,history=select(project,config,policy,client,work,store)
     pair=authority['upstreams']
     if parent['upstreams']==pair:
         output.mkdir();write_json(output/'result.json',{'status':'NO_UPDATE'});return {'status':'NO_UPDATE'}
     need(view['generation']<policy['max_generations'],'AUTOMATIC_GENERATION_LIMIT')
     genuine._clone_sources(work,{'upstreams':parent['upstreams']},pair)
-    need(genuine._authority(project,Path(detection_path),config,config_sha)==authority
+    need(authenticate(project,Path(detection_path),config,config_sha)==authority
          and store.head()==view['head'],'STALE_AUTOMATIC_BUILD_AUTHORITY')
     output.mkdir()
     verified=native.produce(project,folder,work/'base-source',work/'target-source',pair,policy,parent,history,
-        output/'run',project/config['continuous_policy_path'],project/os.environ['AUTOMATIC_LIFECYCLE_POLICY_PATH'])
+        output/'run',project/config['continuous_policy_path'],project/os.environ['AUTOMATIC_LIFECYCLE_POLICY_PATH'],
+        **({'admission_anchor_dir':work/'root/parent','admission_anchor_rows':work/'root/root-rows.json'}
+           if policy['schema_version']==3 else {}))
     need(store.head()==view['head'],'STALE_PARENT_DURING_BUILD')
     write_json(output/'selection.json',{'view':view,'parent':parent,'policy_sha256':policy['policy_sha256'],
         'candidate_id':verified['candidate_id'],'producer':authority['workflow_run']})
@@ -140,7 +147,7 @@ def pre_token(project,work):
     source._new_output(work,(project,));work.mkdir()
     _,artifact=completion.retrieve_build(client,config,observed['actor']['run_id'],1,work/'delivery')
     selected=read_json(work/'delivery/selection.json')
-    store=derived.GitState(config['repository'],config['repository_id'],client.token)
+    store=derived.GitState(config['repository'],config['repository_id'],client.token,**({'ref':policy['derived_ref']} if policy['schema_version']==3 else {}))
     view,parent,_,_=select(project,config,policy,client,work,store)
     need(view==selected['view'] and parent==selected['parent'] and selected['policy_sha256']==policy['policy_sha256']
          and selected['producer']==observed['actor'],'STALE_OR_UNBOUND_BUILD_DELIVERY')
@@ -150,7 +157,7 @@ def pre_token(project,work):
     need(store.head()==view['head'],'STALE_PRETOKEN_PARENT')
     result={'status':'AUTOMATIC_PRETOKEN_VERIFIED' if assessment['decision']=='APPROVED_RELEASE_ELIGIBLE' else 'QUALITY_REJECTED',
         'assessment':assessment,'artifact':artifact,'writer_credential_access':'NOT_ATTEMPTED',
-        **({'ruleset_observation':observed['ruleset_observation']} if policy['schema_version']==2 else {})}
+        **({'ruleset_observation':observed['ruleset_observation']} if policy['schema_version']>=2 else {})}
     write_json(work/'result.json',result)
     return result
 
@@ -164,7 +171,7 @@ def publish_and_advance(project,work):
     origin,artifact=completion.retrieve_build(client,config,observed['actor']['run_id'],1,work/'delivery')
     selected=read_json(work/'delivery/selection.json')
     token=os.environ.get('PARENT_AUTHORITY_AUDIT_TOKEN')
-    store=derived.GitState(config['repository'],config['repository_id'],token,writable=True)
+    store=derived.GitState(config['repository'],config['repository_id'],token,writable=True,**({'ref':policy['derived_ref']} if policy['schema_version']==3 else {}))
     view,parent,folder,history=select(project,config,policy,client,work,store)
     need(view==selected['view'] and parent==selected['parent'] and selected['policy_sha256']==policy['policy_sha256']
          and selected['producer']==observed['actor'],'STALE_OR_UNBOUND_BUILD_DELIVERY')
@@ -172,7 +179,7 @@ def publish_and_advance(project,work):
     root=work/'delivery/run';verified=native.verify(project,root,policy,selected['candidate_id'],parent)
     if not verified['eligible']:
         return {'status':'QUALITY_REJECTED','reasons':verified['report']['reasons'],'writes':'NONE',
-            **({'ruleset_observation':observed['ruleset_observation']} if policy['schema_version']==2 else {})}
+            **({'ruleset_observation':observed['ruleset_observation']} if policy['schema_version']>=2 else {})}
     def revalidate():
         need(policy_api.load(project,config)==policy and writer.observe(project,config,policy,client,token=True)==observed,
              'AUTOMATIC_WRITER_CONTEXT_CHANGED')
@@ -195,4 +202,4 @@ def publish_and_advance(project,work):
     result=derived.advance(store,view,key,entry,receipt,protocol,repeat)
     return {**result,'release':binding,'candidate_id':verified['candidate_id'],'artifact':artifact,
         'deployment':'SEPARATE_VERIFIED_DRIVER_REQUIRED','authoritative_root_registry':'UNCHANGED',
-        **({'ruleset_observation':observed['ruleset_observation']} if policy['schema_version']==2 else {})}
+        **({'ruleset_observation':observed['ruleset_observation']} if policy['schema_version']>=2 else {})}

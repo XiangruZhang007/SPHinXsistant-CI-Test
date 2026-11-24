@@ -10,7 +10,7 @@ from . import parent_authority_git_audit as audit
 from .parent_authority_github_transport import GitHubAuditTransport,AUDIT_TREE
 from . import genuine_continuous_execution as genuine,continuous_completion as completion
 from .corpus_snapshot import canonical,digest
-from .automatic_lifecycle_policy import need
+from .automatic_lifecycle_policy import need,observation_policy
 
 
 def observe(project,config,policy,client,*,token=False):
@@ -46,7 +46,7 @@ def observe(project,config,policy,client,*,token=False):
          and branches['branch_policies'][0].get('name')==config['default_branch']
          and branches['branch_policies'][0].get('type')=='branch','AUTOMATIC_ENVIRONMENT_BRANCH_MISMATCH')
     rules=client._api('GET',base+'/rules/branches/'+config['default_branch'])
-    revised=policy['schema_version']==2
+    revised=policy['schema_version']>=2
     for kind in (() if revised else ('deletion','non_fast_forward','pull_request')):
         origins=[client._api('GET',base+'/rulesets/'+str(x['ruleset_id'])) for x in rules if x.get('type')==kind]
         safe=[r for r in origins if r.get('enforcement')=='active' and r.get('target')=='branch'
@@ -59,7 +59,7 @@ def observe(project,config,policy,client,*,token=False):
     rules_observation=observe_rules(client,policy,project=project)
     if revised:
         from scripts import runtime_ruleset_observation as observation
-        evidence=observation.load(project,policy,default_branch=config['default_branch'],
+        evidence=observation.load(project,observation_policy(policy),default_branch=config['default_branch'],
             governance_sha256=policy['governance_sha256'],operation='AUTOMATIC_LIFECYCLE')
         observation.effective_default(evidence,rules)
     origin=completion.origin(client,config,actor['run_id'],1)
@@ -72,9 +72,9 @@ def observe(project,config,policy,client,*,token=False):
 def observe_rules(client,policy,*,project=None):
     """Shared read-only revocation/governance check for every consumer."""
     base='/repos/'+policy['repository']
-    if policy['schema_version']==2:
+    if policy['schema_version']>=2:
         from scripts import runtime_ruleset_observation as observation
-        evidence=observation.load(project,policy,default_branch='ci-upstream-refresh',
+        evidence=observation.load(project,observation_policy(policy),default_branch='ci-upstream-refresh',
             governance_sha256=policy['governance_sha256'],operation='AUTOMATIC_LIFECYCLE')
         return observation.observe(evidence,lambda number:client._api('GET',base+'/rulesets/'+str(number)),
             update_read=lambda node,number:observation.live_update(client.token,node,number))

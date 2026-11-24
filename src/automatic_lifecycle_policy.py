@@ -30,7 +30,12 @@ def need(ok,reason):
     if not ok:raise ValueError(reason)
 
 
-def contract(project):
+V3_FIELDS={'quality_v3','derived_ref','component_fingerprints'}
+
+def contract(project,*,profile=1):
+    if profile==3:
+        from .native_runtime_contract import contract as native_contract
+        return native_contract(project)
     from . import genuine_continuous_execution as genuine,version_aware_evidence as q1
     return {'schema_version':1,'kind':'AUTOMATIC_LIFECYCLE_V1',
             'files':{n:file_digest(checked_file(project,n)) for n in FILES},
@@ -40,8 +45,8 @@ def contract(project):
 
 def validate(value,raw_pin,*,now=None):
     need(isinstance(value,dict) and type(value.get('schema_version')) is int
-         and value['schema_version'] in (1,2)
-         and set(value)==FIELDS | ({'ruleset_observation'} if value['schema_version']==2 else set())
+         and value['schema_version'] in (1,2,3)
+         and set(value)==FIELDS | ({'ruleset_observation'} if value['schema_version']>=2 else set()) | (V3_FIELDS if value['schema_version']==3 else set())
          and value['kind']=='AUTOMATIC_LIFECYCLE_V1'
          and value['enabled'] is True,'INVALID_AUTOMATIC_POLICY')
     need(scope._hash(raw_pin) and all(scope._hash(value[k]) for k in FIELDS
@@ -71,6 +76,17 @@ def validate(value,raw_pin,*,now=None):
              and re.fullmatch('[A-Za-z0-9_.-]+',row['name']) and scope._hash(row['sha256'])
              and not Path(row['path']).is_absolute() and '..' not in Path(row['path']).parts,
              'INVALID_REVIEWED_LICENSE_BINDING')
+    if value['schema_version']==3:
+        need(isinstance(value['derived_ref'],str) and re.fullmatch(r'refs/heads/ci-v2-authority-audit/derived-parent-state-v(?:[2-9]|[1-9][0-9]+)',value['derived_ref']),'INVALID_V3_DERIVED_REF')
+        components=value['component_fingerprints']
+        need(isinstance(components,dict) and set(components)=={'construction','retrieval','benchmark','evaluation','admission','lifecycle'}
+             and all(scope._hash(v) for v in components.values()),'INVALID_V3_COMPONENT_PINS')
+        quality=value['quality_v3']
+        need(isinstance(quality,dict) and set(quality)=={'policy','references'},'INVALID_V3_PINS')
+        for pin in quality.values():
+            need(isinstance(pin,dict) and set(pin)=={'path','sha256'}
+                 and isinstance(pin['path'],str) and re.fullmatch(r'configs/[A-Za-z0-9_.-]+\.json',pin['path'])
+                 and scope._hash(pin['sha256']),'INVALID_V3_PIN')
     result={**value,'policy_sha256':raw_pin}
     # Genesis excludes its own SHA and raw approval pin, avoiding a hash cycle.
     result['scope_sha256']=digest({k:v for k,v in value.items() if k!='genesis_sha'})
@@ -85,14 +101,36 @@ def load(project,config):
     from . import upstream_provenance as source
     source._git(project,'ls-files','--error-unmatch','--',path)
     value=validate(scope._read_pinned(project,path,pin),pin)
-    if value['schema_version']==2:
+    if value['schema_version']>=2:
         from scripts import runtime_ruleset_observation as observation
-        observation.load(project,value,default_branch=config['default_branch'],
+        observation.load(project,observation_policy(value),default_branch=config['default_branch'],
             governance_sha256=value['governance_sha256'],operation='AUTOMATIC_LIFECYCLE')
     need(all(type(value[k]) is type(config[k]) and value[k]==config[k] for k in ('repository','repository_id'))
          and config['workflow_path']=='.github/workflows/upstream_refresh.yml'
          and value['root_registry_sha256']==config['registry_sha256']
          and value['continuous_policy_sha256']==config['continuous_policy_sha256']
-         and value['implementation_contract_sha256']==digest(contract(project)),
+         and value['implementation_contract_sha256']==digest(contract(project,profile=value['schema_version'])),
          'AUTOMATIC_POLICY_DEPLOYMENT_MISMATCH')
+    if value['schema_version']==3:
+        from . import quality_admission,admission_evidence,native_runtime_contract
+        need(value['component_fingerprints']==native_runtime_contract.components(project),'V3_COMPONENT_MISMATCH')
+        from .corpus_snapshot import read_json
+        for pin in value['quality_v3'].values():
+            source._git(project,'ls-files','--error-unmatch','--',pin['path'])
+            need(file_digest(checked_file(project,pin['path']))==pin['sha256'],'V3_EXTERNAL_PIN_MISMATCH')
+        quality_admission.validate(read_json(checked_file(project,value['quality_v3']['policy']['path'])))
+        refs=read_json(checked_file(project,value['quality_v3']['references']['path']))
+        from . import approval_evidence as ev
+        admission_evidence.validate(refs,read_json(checked_file(project,ev.BENCHMARK)))
+        registry=read_json(checked_file(project,config['registry_path']))
+        entry=registry['baselines'][value['initial_parent_key']]
+        need(refs['root_reference_sha256']==entry['expected_reference_sha256']
+             and refs['anchor_corpus_sha256']==entry['reference']['corpus_sha256']
+             and refs['anchor_rows_sha256']==entry['reference']['parent_rows_sha256']
+             and refs['benchmark_sha256']==value['benchmark_sha256'],'V3_ROOT_REFERENCE_MISMATCH')
     return value
+
+
+def observation_policy(value):
+    # V3 reuses exactly the already approved v2 observation contract.
+    return {**value,'schema_version':2} if value['schema_version']==3 else value

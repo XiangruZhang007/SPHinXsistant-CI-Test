@@ -37,10 +37,12 @@ def serialize(value): return canonical(value)+b'\n'
 
 class GitState:
     """Restricted Git DB client; mutation is exposed only as an exact append."""
-    def __init__(self, repository, repository_id, token, *, writable=False):
+    def __init__(self, repository, repository_id, token, *, writable=False, ref=REF):
         need(re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',repository) and
              type(repository_id) is int and repository_id>0 and isinstance(token,str)
              and bool(token) and not any(c.isspace() for c in token),'INVALID_STATE_TRANSPORT')
+        need(isinstance(ref,str) and (ref==REF or re.fullmatch(r'refs/heads/ci-v2-authority-audit/derived-parent-state-v(?:[2-9]|[1-9][0-9]+)',ref)),'INVALID_DERIVED_REF')
+        self.ref=ref
         self.repository,self.repository_id=repository,repository_id
         need(type(writable) is bool,'INVALID_WRITE_SCOPE')
         self._token,self._scope,self._requests=token,writable,0
@@ -48,10 +50,10 @@ class GitState:
         self._attempted=False;self._cache={}
 
     def _call(self,method,suffix,body=None):
-        allowed = (method == 'GET' and (suffix == '' or suffix == '/git/ref/'+REF[5:]
+        allowed = (method == 'GET' and (suffix == '' or suffix == '/git/ref/'+self.ref[5:]
             or re.fullmatch(r'/git/(commits|trees|blobs)/[0-9a-f]{40}',suffix))) or (
             self._scope and self._attempted and ((method=='POST' and suffix in ('/git/trees','/git/commits'))
-                or (method=='PATCH' and suffix=='/git/refs/'+REF[5:] and body.get('force') is False)))
+                or (method=='PATCH' and suffix=='/git/refs/'+self.ref[5:] and body.get('force') is False)))
         need(allowed,'UNSUPPORTED_DERIVED_API_OPERATION')
         # Reuse bounded, no-redirect, sanitized authenticated R4 HTTP exchange.
         status,value=GitHubAuditTransport._exchange(self,method,'repos/'+self.repository+suffix,body)
@@ -63,8 +65,8 @@ class GitState:
         need(repository_identity(value,self.repository,self.repository_id),'DERIVED_REPOSITORY_MISMATCH')
 
     def head(self):
-        self.identity();value=self._call('GET','/git/ref/'+REF[5:])
-        need(value.get('ref')==REF and value.get('object',{}).get('type')=='commit','INVALID_DERIVED_REF')
+        self.identity();value=self._call('GET','/git/ref/'+self.ref[5:])
+        need(value.get('ref')==self.ref and value.get('object',{}).get('type')=='commit','INVALID_DERIVED_REF')
         sha=value['object']['sha'];need(audit._hash(sha,40),'INVALID_DERIVED_HEAD');return sha
 
     def read(self,sha):
@@ -104,7 +106,7 @@ class GitState:
              'CREATED_STATE_MISMATCH')
         # Sibling commits race safely: GitHub force=false rejects the loser.
         need(self.head()==expected,'STALE_DERIVED_HEAD')
-        value=self._call('PATCH','/git/refs/'+REF[5:],{'sha':sha,'force':False})
+        value=self._call('PATCH','/git/refs/'+self.ref[5:],{'sha':sha,'force':False})
         need(value.get('object',{}).get('sha')==sha and self.head()==sha,'DERIVED_WRITE_OUTCOME_UNCERTAIN')
         observed=self.read(sha)
         need(observed['registry.json']==registry and observed['lineage.json']==lineage
