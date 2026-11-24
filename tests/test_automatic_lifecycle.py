@@ -41,7 +41,7 @@ def policy():
     value.update(schema_version=1,kind='AUTOMATIC_LIFECYCLE_V1',enabled=True,repository='FixtureOwner/ContinuousTest',
         repository_id=10001,root_revision='b'*40,initial_parent_key='root',genesis_sha='a'*40,
         valid_from='2020-01-01T00:00:00Z',expires_at='2099-01-01T00:00:00Z',max_generations=8,max_advance_commits=10,
-        build_fingerprint='d'*64,release_prefix='admitted',writer_environment='ci-v2-audit-writer',
+        build_fingerprint='d'*64,release_prefix='admitted',writer_environment='ci-v2-automatic-writer',writer_environment_id=12345,
         history_ruleset_id=1,writer_ruleset_id=2,writer_integration_id=5855475,installation_id=184185108,
         deployment_path='configs/deployment.json',permissions={k:True for k in ('construction','admission','publication','derived_registry','deployment')},
         licenses=[{'name':'license'+str(i)+'.txt','repository':'PROJECT','path':'LICENSE','sha256':'f'*64} for i in range(7)])
@@ -146,7 +146,7 @@ class LifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'DERIVED_GENERATION_LIMIT'):self.view()
     def test_policy_expiry_and_missing_scope_fail_closed(self):
         raw={k:v for k,v in self.policy.items() if k in policy_api.FIELDS}
-        for change in ({'expires_at':'2020-01-02T00:00:00Z'},{'permissions':{}},{'writer_environment':'other'}):
+        for change in ({'expires_at':'2020-01-02T00:00:00Z'},{'permissions':{}},{'writer_environment':'other'},{'writer_environment':'ci-v2-audit-writer'},{'writer_environment_id':0},{'writer_environment_id':True}):
             with self.subTest(change=change),self.assertRaises(ValueError):policy_api.validate({**raw,**change},'f'*64)
     def test_empty_or_noncanonical_state_rejected(self):
         for raw in (b'{}',b'{"x":1,"x":2}\n',b'x'*(128*1024+1)):

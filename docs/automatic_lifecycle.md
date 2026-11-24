@@ -20,8 +20,10 @@ clones exact current-Parent/target sources, reuses incremental assembly,
 independent Full reconstruction, frozen R2 and unchanged Q1, and seals the run.
 A source pair already present in the selected Parent produces NO_UPDATE.
 
-`automatic-parent-writer` is a separate Environment-bound job. Its pre-token
-step independently downloads the original successful build Artifact, checks
+`automatic-parent-writer` uses the dedicated `ci-v2-automatic-writer` Environment.
+The tracked automatic policy pins its actual numeric ID in `writer_environment_id`.
+The manual R4 job retains `ci-v2-audit-writer` and its required human approval.
+The automatic job’s pre-token step independently downloads the original successful build Artifact, checks
 Artifact-to-Run attribution, ZIP digest and safe extraction, resolves the Parent
 again and verifies all native scientific evidence. Rejection prevents the App
 private-key action. The read-only build job has no Writer Environment or key.
@@ -141,7 +143,7 @@ owned driver and read-only transport after separate server configuration review.
    identity is invented. Provisioning refs/Rulesets/credentials is not performed.
 4. Verify Rulesets A/B and installation scope. The existing Writer Environment
    requires per-run human review, so automatic mode explicitly refuses it. A
-   separately authorized one-time Environment configuration decision is required
+   separately authorized one-time dedicated automatic Environment configuration decision is required
    for unattended mode. The manual Owner gate still demands its original reviewer
    setup; it is never silently weakened or relabelled as automatic authorization.
    GitHub's `branch_policy` protection rule must remain present alongside the

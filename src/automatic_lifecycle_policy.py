@@ -11,7 +11,7 @@ FIELDS={'schema_version','kind','enabled','repository','repository_id','root_rev
     'benchmark_sha256','q1_implementation_sha256','implementation_contract_sha256',
     'historical_rows_sha256','release_prefix','licenses',
     'history_ruleset_id','writer_ruleset_id','writer_integration_id','installation_id',
-    'governance_sha256','writer_environment','deployment_path','deployment_sha256',
+    'governance_sha256','writer_environment','writer_environment_id','deployment_path','deployment_sha256',
     'permissions'}
 FILES=('src/automatic_lifecycle_policy.py','src/automatic_candidate.py','src/automatic_lifecycle.py',
     'src/derived_parent_registry.py','src/automatic_release.py','src/automatic_writer.py',
@@ -54,8 +54,8 @@ def validate(value,raw_pin,*,now=None):
     need(start<= (now or datetime.now(timezone.utc)) <end,'AUTOMATIC_POLICY_EXPIRED_OR_NOT_CURRENT')
     need(re.fullmatch('[a-z][a-z0-9-]{0,39}',value['release_prefix']) and
          re.fullmatch(r'configs/[A-Za-z0-9_.-]+\.json',value['deployment_path']), 'UNSAFE_AUTOMATIC_PATH')
-    need(value['writer_environment']=='ci-v2-audit-writer' and all(type(value[k]) is int and value[k]>0
-        for k in ('history_ruleset_id','writer_ruleset_id','writer_integration_id','installation_id')),
+    need(value['writer_environment']=='ci-v2-automatic-writer' and all(type(value[k]) is int and value[k]>0
+        for k in ('history_ruleset_id','writer_ruleset_id','writer_integration_id','installation_id','writer_environment_id')),
         'INVALID_AUTOMATIC_WRITER_DOMAIN')
     licenses=value['licenses']
     need(isinstance(licenses,list) and len(licenses)==7 and len({r['name'] for r in licenses})==7,

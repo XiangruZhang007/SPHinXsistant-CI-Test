@@ -34,14 +34,14 @@ def observe(project,config,policy,client,*,token=False):
     environment=client._api('GET',base+'/environments/'+policy['writer_environment'])
     # An automatic policy is not a per-update Environment approval. The existing
     # required-reviewer setup therefore cannot silently enable unattended writes.
-    need(environment.get('id')==gate.ENVIRONMENT_ID and environment.get('name')==gate.ENVIRONMENT
+    need(environment.get('id')==policy['writer_environment_id'] and environment.get('name')==policy['writer_environment']
          and environment.get('can_admins_bypass') is False
          and isinstance(environment.get('protection_rules'),list)
          and len(environment['protection_rules'])==1
          and environment['protection_rules'][0].get('type')=='branch_policy'
          and environment.get('deployment_branch_policy')=={'protected_branches':False,'custom_branch_policies':True},
          'AUTOMATIC_ENVIRONMENT_CONFIGURATION_REQUIRED')
-    branches=client._api('GET',base+'/environments/'+gate.ENVIRONMENT+'/deployment-branch-policies?per_page=100')
+    branches=client._api('GET',base+'/environments/'+policy['writer_environment']+'/deployment-branch-policies?per_page=100')
     need(branches.get('total_count')==1 and len(branches.get('branch_policies',[]))==1
          and branches['branch_policies'][0].get('name')==config['default_branch']
          and branches['branch_policies'][0].get('type')=='branch','AUTOMATIC_ENVIRONMENT_BRANCH_MISMATCH')

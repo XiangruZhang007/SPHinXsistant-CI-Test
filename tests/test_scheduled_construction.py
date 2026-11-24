@@ -327,7 +327,7 @@ class ScheduledTests(unittest.TestCase):
         writers = [name for name, job in doc['jobs'].items() if job.get('permissions', {}).get('contents') == 'write']
         self.assertEqual(writers, ['publish-continuous-candidate','automatic-parent-writer'])
         automatic=doc['jobs']['automatic-parent-writer']
-        self.assertEqual(automatic['environment'],'ci-v2-audit-writer')
+        self.assertEqual(automatic['environment'],'ci-v2-automatic-writer')
         self.assertIn("vars.AUTOMATIC_LIFECYCLE_ENABLED == 'true'",automatic['if'])
         job = doc['jobs']['publish-continuous-candidate']
         self.assertIn("vars.CONTINUOUS_PUBLICATION_ENABLED == 'true'", job['if'])
@@ -472,7 +472,7 @@ class PreflightRuntimeTests(unittest.TestCase):
         # The explicit automatic-policy route is separately gated. Normalize
         # only its reviewed additions before comparing the historical workflow.
         automatic=current['jobs'].pop('automatic-parent-writer')
-        self.assertEqual(automatic['environment'],'ci-v2-audit-writer')
+        self.assertEqual(automatic['environment'],'ci-v2-automatic-writer')
         self.assertIn("vars.AUTOMATIC_LIFECYCLE_ENABLED == 'true'",automatic['if'])
         continuous=current['jobs']['continuous-candidate']
         for name in ('AUTOMATIC_LIFECYCLE_ENABLED','AUTOMATIC_LIFECYCLE_POLICY_PATH','AUTOMATIC_LIFECYCLE_POLICY_SHA256'):

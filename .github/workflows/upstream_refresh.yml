@@ -372,7 +372,7 @@ jobs:
     if: ${{ always() && github.event_name == 'schedule' && needs.continuous-candidate.result == 'success' && needs.continuous-candidate.outputs.candidate_built == 'true' && vars.AUTOMATIC_LIFECYCLE_ENABLED == 'true' && vars.CONTINUOUS_PUBLICATION_ENABLED == 'true' }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
-    environment: ci-v2-audit-writer
+    environment: ci-v2-automatic-writer
     permissions:
       contents: write
       actions: read

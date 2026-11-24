@@ -23,10 +23,10 @@ class WriterGateTests(unittest.TestCase):
         protected={'id':3,'target':'branch','enforcement':'active','bypass_actors':[],
             'conditions':{'ref_name':{'include':['refs/heads/ci-upstream-refresh'],'exclude':[]}},
             'rules':[{'type':'deletion'},{'type':'non_fast_forward'},{'type':'pull_request','parameters':params}]}
-        env={'id':manual.ENVIRONMENT_ID,'name':manual.ENVIRONMENT,'can_admins_bypass':False,'protection_rules':[{'id':1,'type':'branch_policy'}],
+        env={'id':self.policy['writer_environment_id'],'name':self.policy['writer_environment'],'can_admins_bypass':False,'protection_rules':[{'id':1,'type':'branch_policy'}],
             'deployment_branch_policy':{'protected_branches':False,'custom_branch_policies':True}}
-        self.responses={base:{'owner':{'id':manual.OWNER_ID}},base+'/environments/'+manual.ENVIRONMENT:env,
-            base+'/environments/'+manual.ENVIRONMENT+'/deployment-branch-policies?per_page=100':{'total_count':1,'branch_policies':[{'name':'ci-upstream-refresh','type':'branch'}]},
+        self.responses={base:{'owner':{'id':manual.OWNER_ID}},base+'/environments/'+self.policy['writer_environment']:env,
+            base+'/environments/'+self.policy['writer_environment']+'/deployment-branch-policies?per_page=100':{'total_count':1,'branch_policies':[{'name':'ci-upstream-refresh','type':'branch'}]},
             base+'/rules/branches/ci-upstream-refresh':[{'type':k,'ruleset_id':3} for k in ('deletion','non_fast_forward','pull_request')],
             base+'/rulesets/1':a,base+'/rulesets/2':b,base+'/rulesets/3':protected}
         self.policy['governance_sha256']=digest({'schema_version':1,'rulesets':[a,b]})
@@ -46,10 +46,10 @@ class WriterGateTests(unittest.TestCase):
             result=self.observe();self.assertEqual(result['origin']['event'],'schedule');token.assert_not_called()
         self.assertTrue(all(call.args[0]=='GET' for call in self.client._api.call_args_list))
     def test_existing_manual_environment_blocks_unattended_mode(self):
-        self.responses['/repos/'+manual.REPOSITORY+'/environments/'+manual.ENVIRONMENT]['protection_rules']=[{'type':'required_reviewers'}]
+        self.responses['/repos/'+manual.REPOSITORY+'/environments/'+self.policy['writer_environment']]['protection_rules']=[{'type':'required_reviewers'}]
         with self.assertRaisesRegex(ValueError,'AUTOMATIC_ENVIRONMENT_CONFIGURATION_REQUIRED'):self.observe()
     def test_missing_branch_rule_or_additional_protection_is_not_unattended(self):
-        env=self.responses['/repos/'+manual.REPOSITORY+'/environments/'+manual.ENVIRONMENT]
+        env=self.responses['/repos/'+manual.REPOSITORY+'/environments/'+self.policy['writer_environment']]
         for rules in ([],[{'type':'branch_policy'},{'type':'wait_timer'}],
                 [{'type':'branch_policy'},{'type':'required_reviewers'}],
                 [{'type':'branch_policy'},{'type':'branch_policy'}]):
@@ -69,8 +69,12 @@ class WriterGateTests(unittest.TestCase):
         self.responses['/repos/'+manual.REPOSITORY+'/rulesets/3']['bypass_actors']=[{'actor_id':1}]
         with self.assertRaisesRegex(ValueError,'BRANCH_PROTECTION'):self.observe()
     def test_wrong_environment_or_unexpected_branch_denied(self):
-        self.responses['/repos/'+manual.REPOSITORY+'/environments/'+manual.ENVIRONMENT]['id']=1
+        self.responses['/repos/'+manual.REPOSITORY+'/environments/'+self.policy['writer_environment']]['id']=1
         with self.assertRaises(ValueError):self.observe()
+    def test_manual_environment_identity_cannot_replace_automatic_environment(self):
+        env=self.responses['/repos/'+manual.REPOSITORY+'/environments/'+self.policy['writer_environment']]
+        env.update(id=manual.ENVIRONMENT_ID,name=manual.ENVIRONMENT)
+        with self.assertRaisesRegex(ValueError,'AUTOMATIC_ENVIRONMENT_CONFIGURATION_REQUIRED'):self.observe()
     def test_wrong_job_or_revision_denied_before_api(self):
         for change in ({'GITHUB_JOB':'inspect-transition'},{'GITHUB_SHA':'b'*40},{'GITHUB_RUN_ATTEMPT':'2'}):
             with self.subTest(change=change),patch.dict(self.environment,change),self.assertRaises(ValueError):self.observe()
@@ -90,7 +94,9 @@ class WorkflowTests(unittest.TestCase):
         jobs=value['jobs'];build=jobs['continuous-candidate'];privileged=jobs['automatic-parent-writer']
         self.assertEqual(build['permissions'],{'contents':'read','actions':'read'})
         self.assertNotIn('CI_V2_AUDIT_APP_PRIVATE_KEY',str(build));self.assertNotIn('environment',build)
-        self.assertEqual(privileged['environment'],'ci-v2-audit-writer')
+        self.assertEqual(privileged['environment'],'ci-v2-automatic-writer')
+        manual_workflow=yaml.safe_load((project/'.github/workflows/ci_v2_parent_authority_transition.yml').read_text())
+        self.assertIn('ci-v2-audit-writer',[j.get('environment') for j in manual_workflow['jobs'].values()])
         steps=privileged['steps'];gate=next(i for i,s in enumerate(steps) if 'pre-token' in s.get('run',''))
         mint=next(i for i,s in enumerate(steps) if s.get('id')=='app-token')
         execute=next(i for i,s in enumerate(steps) if 'automatic_lifecycle.py advance' in s.get('run',''))
