@@ -53,7 +53,8 @@
       }
     },
     "official-research-parent-9519233d": {
-      "entry_kind": "REGISTRATION_ONLY",
+      "build_policy_path": "configs/ci_v2_initial_parent_build_policy.json",
+      "build_policy_sha256": "7a8fab3e2011a4ab98c854820db800b6f246428d128a0707eb78469ad8704284",
       "expected_reference_sha256": "83df3259b292e3e0323b19fbe1bb5b01afd4f74cfdb8b96f452b1da2468d8724",
       "reference": {
         "accepted_package_schema": 2,
