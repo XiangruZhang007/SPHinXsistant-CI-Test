@@ -13,6 +13,10 @@ from . import version_aware_evidence as q, continuous_build_policy as scope
 from .corpus_snapshot import checked_file, digest, file_digest, read_json, read_records, write_json
 
 FORMAT='genuine-continuous-candidate-v4'
+FORMAT_V5='genuine-continuous-candidate-v5'
+
+def package_format(policy):
+    return FORMAT_V5 if policy.get('schema_version') == 3 else FORMAT
 
 
 def need(ok,reason):
@@ -100,19 +104,26 @@ def science(project,root,policy,parent,proofs):
         'accepted':not reasons,'reasons':sorted(set(reasons)),
         'q1':'QUALIFIED_FOR_VERSION_PAIR' if 'Q1_REVIEW_REQUIRED' not in reasons else 'Q1_NOT_QUALIFIED_FOR_VERSION_PAIR',
         'P8':'ELIGIBLE' if not reasons else 'P8_BLOCKED','corpus_sha256':target['corpus_sha256']}
+    if policy.get('schema_version') == 3:
+        from .quality_admission import evaluate
+        report=evaluate(project,root,policy,rows,report,spec)
     return report,mapping,target
 
 
 def verify(project,root,policy,expected_candidate_id,parent):
     root=Path(root);v1._check_seal(root)
+    if policy.get('schema_version')==3:
+        from .native_runtime_contract import components
+        need(policy['component_fingerprints']==components(project),'V3_COMPONENT_MISMATCH')
     need({p.name for p in root.iterdir()}=={'parent','candidate','full','extraction-observations','source-policy.json',
-        'policy.json','source-proofs.json','parity.json','quality','q1-report.json','license-sources.json','result.json','checksums.json'},
+        'policy.json','source-proofs.json','parity.json','quality','q1-report.json','license-sources.json','result.json','checksums.json'} |
+             ({'admission-policy.json','admission-references.json','admission-anchor-corpus.jsonl','admission-anchor-rows.json'} if policy.get('schema_version')==3 else set()),
         'UNEXPECTED_NATIVE_RUN_MEMBERS')
     need({p.name for p in (root/'quality').iterdir()}=={'base-rows.json','target-rows.json','full-rows.json','historical-rows.json','admission.json'},
         'UNEXPECTED_NATIVE_QUALITY_MEMBERS')
     meta=read_json(checked_file(root,'candidate/genuine-candidate.json'));i=meta['identity']
     need(set(meta)=={'schema_version','format','candidate_id','identity'} and meta['schema_version']==1
-         and type(meta['schema_version']) is int and meta['format']==i['format']==FORMAT and meta['candidate_id']==expected_candidate_id=='sha256-'+digest(i),
+         and type(meta['schema_version']) is int and meta['format']==i['format']==package_format(policy) and meta['candidate_id']==expected_candidate_id=='sha256-'+digest(i),
          'INVALID_NATIVE_CANDIDATE_ID')
     need(set(i)=={'format','generation','parent','upstreams','source_state','build_fingerprint',
                   'policy_sha256','artifacts','purpose'} and i['purpose']=='POLICY_BOUND_AUTOMATIC_LIFECYCLE'
@@ -140,8 +151,10 @@ def verify(project,root,policy,expected_candidate_id,parent):
             'verification':'COMPLETE_NATIVE_PACKAGE_VERIFIED','eligible':report['accepted']}
 
 
-def produce(project,parent_dir,base_source,target_source,upstreams,policy,parent,history,output,source_policy_path,automatic_policy_path):
+def produce(project,parent_dir,base_source,target_source,upstreams,policy,parent,history,output,source_policy_path,automatic_policy_path,*,admission_anchor_dir=None,admission_anchor_rows=None):
     """Only the trusted scheduled caller supplies authority; this builds evidence."""
+    if policy.get('schema_version')==3:
+        need(admission_anchor_dir is not None and admission_anchor_rows is not None,'V3_INITIAL_ANCHOR_REQUIRED')
     root=Path(output);source._new_output(root,(parent_dir,base_source,target_source,project));v1._files(Path(parent_dir));root.mkdir()
     shutil.copytree(parent_dir,root/'parent',symlinks=False)
     need(material(root/'parent')==parent['material'],'PARENT_MATERIAL_MISMATCH')
@@ -160,10 +173,18 @@ def produce(project,parent_dir,base_source,target_source,upstreams,policy,parent
     write_json(root/'source-proofs.json',proof)
     artifacts={'candidate/'+n:file_digest(root/'candidate'/n) for n in v1.MATERIAL}
     artifacts.update({'candidate/input/'+q._path(row):file_digest(root/'candidate/input'/q._path(row)) for row in selection})
-    i={'format':FORMAT,'generation':parent['generation']+1,'parent':parent,'upstreams':upstreams,
+    if policy.get('schema_version')==3:
+        need(admission_anchor_dir is not None and admission_anchor_rows is not None,'V3_INITIAL_ANCHOR_REQUIRED')
+        for name in ('policy','references'):
+            pin=policy['quality_v3'][name]
+            need(file_digest(Path(project)/pin['path'])==pin['sha256'],'V3_EXTERNAL_PIN_MISMATCH')
+            shutil.copyfile(Path(project)/pin['path'],root/('admission-'+name+'.json'))
+        shutil.copyfile(Path(admission_anchor_dir)/'corpus.jsonl',root/'admission-anchor-corpus.jsonl')
+        shutil.copyfile(admission_anchor_rows,root/'admission-anchor-rows.json')
+    i={'format':package_format(policy),'generation':parent['generation']+1,'parent':parent,'upstreams':upstreams,
        'source_state':source.state(selection),'build_fingerprint':policy['build_fingerprint'],
        'policy_sha256':policy['policy_sha256'],'artifacts':artifacts,'purpose':'POLICY_BOUND_AUTOMATIC_LIFECYCLE'}
-    meta={'schema_version':1,'format':FORMAT,'candidate_id':'sha256-'+digest(i),'identity':i}
+    meta={'schema_version':1,'format':package_format(policy),'candidate_id':'sha256-'+digest(i),'identity':i}
     write_json(root/'candidate/genuine-candidate.json',meta)
     write_json(root/'candidate/candidate.json',v1._projection(meta['candidate_id'],{
         'parent':parent,'target_source_state':i['source_state']}))

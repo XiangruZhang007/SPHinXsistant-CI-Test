@@ -168,7 +168,7 @@ class PublicationTests(unittest.TestCase):
         self.client=type('Client',(),{})();self.client.repository=self.policy['repository'];self.client.token='fixture'
         self.client._api=self.api;self.client._upload=self.upload
         self.patch=patch('src.automatic_candidate.verify',return_value=self.verified);self.patch.start();self.addCleanup(self.patch.stop)
-        self.verified['report'].update(status='QUALITY_ACCEPTED',q1='QUALIFIED_FOR_VERSION_PAIR',P8='ELIGIBLE',reasons=[])
+        self.verified['report'].update(contract='AUTOMATIC_QUALITY_V2',status='QUALITY_ACCEPTED',q1='QUALIFIED_FOR_VERSION_PAIR',P8='ELIGIBLE',reasons=[])
         self.patch2=patch.object(release,'verify_license_sources',return_value={f'license{i}.txt':b'fixture license' for i in range(7)})
         self.patch2.start();self.addCleanup(self.patch2.stop)
         self.policy['licenses']=[];write_json(root/'source-proofs.json',{'base':{},'target':{}})
@@ -252,7 +252,7 @@ class CompleteOrchestrationTests(unittest.TestCase):
         case.client.repository=case.policy['repository']
         case.config.update(repository=case.policy['repository'],repository_id=case.policy['repository_id'],implementation_revision=lineage.config['implementation_revision'])
         current={'generation':0,'node_id':'sha256-'+'e'*64,'corpus_sha256':'f'*64}
-        context={}
+        context={'ruleset_observation':{'mode':'CONTROLLED_FIXTURE'}}
         project=Path(__file__).resolve().parents[1]
         def selected(*args):
             view=lineage.view()

@@ -1,0 +1,109 @@
+{
+  "benchmark_sha256": "bac0b31b74410eaff00246e628187ee07c4aaefb8747ad076f090393b71d1ab7",
+  "build_fingerprint": "7f66fe80e92d7263d5147d4fea551855184af75829f5b62993eb162acceb0cd8",
+  "component_fingerprints": {
+    "admission": "8bbda6394b97e52763f4feec18df2d88ca5f6ade9dd44f01cd274ed67df9f2be",
+    "benchmark": "bac0b31b74410eaff00246e628187ee07c4aaefb8747ad076f090393b71d1ab7",
+    "construction": "7f66fe80e92d7263d5147d4fea551855184af75829f5b62993eb162acceb0cd8",
+    "evaluation": "587a6e4ff88bad6a9f15471b237d2fb9267c6f42b596bcfb6412c23a744576ff",
+    "lifecycle": "6fc0a46dbab7251f23f13429ccd22c4dc145a6a53448fc6b83f80a463ca2d8ca",
+    "retrieval": "1b21c01ef077549c60ba17109cc9381d1172b6e483c707c146cb7d80bcaa3f6d"
+  },
+  "continuous_policy_sha256": "564faec69dbaf7d006f9645e28ee206dc1093c3d55498c229e742c350eb6640b",
+  "deployment_path": "configs/ci_v2_automatic_deployment.json",
+  "deployment_sha256": "49bc07a2b61dcefd5c05c06b4a725d057f5fcb7adac7ef96ef347ebc295ecd5b",
+  "derived_ref": "refs/heads/ci-v2-authority-audit/derived-parent-state-v2",
+  "enabled": true,
+  "expires_at": "2026-12-09T00:00:00Z",
+  "genesis_sha": "58b5682dee493b8d80807102536c3d459cc0335f",
+  "governance_sha256": "da7ec16e65c9cfdcde34af6ab244d35df3ba313dc011abed9a81623ae67fe344",
+  "historical_rows_sha256": "659af559de9d648a73c2aa0706b0308721bd16f66da2a76012e7767d6b1e323e",
+  "history_ruleset_id": 27770139,
+  "implementation_contract_sha256": "6fc0a46dbab7251f23f13429ccd22c4dc145a6a53448fc6b83f80a463ca2d8ca",
+  "initial_parent_key": "official-research-parent-9519233d",
+  "installation_id": 184185108,
+  "kind": "AUTOMATIC_LIFECYCLE_V1",
+  "licenses": [
+    {
+      "name": "Apache-2.0-SPHinXsys.txt",
+      "path": "LICENSE",
+      "repository": "SPHinXsys",
+      "sha256": "a58a31e19f0df71ea68e78cedb67f309822717f1aa59e898ff0489c0184edd45"
+    },
+    {
+      "name": "MIT-SPHinXsim.txt",
+      "path": "LICENSE",
+      "repository": "SPHinXsim",
+      "sha256": "69e91f0babc5a2b21fc484a3c868d7f94890cc1cb7515b3edf80e73dfbcc0e14"
+    },
+    {
+      "name": "ISC-Mapbox-earcut-source.txt",
+      "path": "src/for_2D_build/geometries/earcut.hpp",
+      "repository": "SPHinXsys",
+      "sha256": "72a40ebfb4336a49f0a7a3089a9919e8f7bcbe11f8e31422897c4f62390770e6"
+    },
+    {
+      "name": "TriangleMeshDistance-MIT-source.txt",
+      "path": "src/for_3D_build/geometries/TriangleMeshDistance.h",
+      "repository": "SPHinXsys",
+      "sha256": "27e5a40a0fe4b5c3735013ec0414637bbb6e3147053372b52d8bfa1a3985cc01"
+    },
+    {
+      "name": "stl-reader-BSD-source.txt",
+      "path": "src/for_3D_build/geometries/stl_reader.h",
+      "repository": "SPHinXsys",
+      "sha256": "e842e61cedc43c0878b8af10353080d5c66171dfbd967f9994ae57e248a30a77"
+    },
+    {
+      "name": "Polar-decomposition-MIT-source.txt",
+      "path": "src/for_3D_build/particle_dynamics/solid_dynamics/polar_decomposition_3x3.h",
+      "repository": "SPHinXsys",
+      "sha256": "313db0a7ba0f140cfb87a4e641c0c26c79be8749990eb256ca5a04d5b8fedfa3"
+    },
+    {
+      "name": "TinyXML-2-source.txt",
+      "path": "src/shared/tools/tinyxml2.h",
+      "repository": "SPHinXsys",
+      "sha256": "6f577b11e64d7133aedf4b418142af56d39823a2367c82ca7f121cb11c8b8d88"
+    }
+  ],
+  "max_advance_commits": 256,
+  "max_generations": 2,
+  "permissions": {
+    "admission": true,
+    "construction": true,
+    "deployment": true,
+    "derived_registry": true,
+    "publication": true
+  },
+  "q1_implementation_sha256": "ee2a4e087d9833f8757c86e72ea76b91c27bc05b6fbcd7539d4fc9d50e39d5c3",
+  "quality_v3": {
+    "policy": {
+      "path": "configs/ci_v2_quality_admission_v3.json",
+      "sha256": "c754d711f0eaac72b6c47fb70387ff11854aed306ffe659a863f5e3ad245f49c"
+    },
+    "references": {
+      "path": "configs/ci_v2_admission_references_v1.json",
+      "sha256": "df325c7f6cabc55b199ddfb1862c55749271a1c3f02a42252f4d533136c41186"
+    }
+  },
+  "release_prefix": "ci-v2-admitted",
+  "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
+  "repository_id": 1455203884,
+  "root_registry_canonical_sha256": "fb33f1b58b9c171b95edaaf8b3e8a1856ee17887c4cdf00095023416de7e3044",
+  "root_registry_sha256": "e7290b4465cc1512aea37c2accd5cdcf357e967947ca567137c165195d3cb187",
+  "root_revision": "3a60d2a82bdff3793c273a45a53c62515157a906",
+  "ruleset_observation": {
+    "evidence_path": "configs/ci_v2_runtime_ruleset_observation.json",
+    "evidence_sha256": "928a17f1a8f127ea6669bf3a4728f2451625fa24cd76aca93ef474e4898c2334",
+    "mode": "OWNER_PINNED_WITH_LIVE_PUBLIC_PROJECTION",
+    "operation": "AUTOMATIC_LIFECYCLE",
+    "risk_acceptance": "CURRENT_BYPASS_CONFIGURATION_UNVERIFIABLE"
+  },
+  "schema_version": 3,
+  "valid_from": "2026-11-24T18:32:18Z",
+  "writer_environment": "ci-v2-automatic-writer",
+  "writer_environment_id": 28321116175,
+  "writer_integration_id": 5855475,
+  "writer_ruleset_id": 27974931
+}

@@ -1,0 +1,41 @@
+{
+  "critical_failures": 0,
+  "enabled": true,
+  "floors_percent": {
+    "combined": {
+      "10": 65,
+      "5": 60
+    },
+    "documentation_only": {
+      "10": 90,
+      "5": 90
+    }
+  },
+  "kind": "AUTOMATIC_QUALITY_V3",
+  "max_anchor_losses": {
+    "combined": {
+      "10": 1,
+      "5": 1
+    },
+    "documentation_only": {
+      "10": 1,
+      "5": 1
+    }
+  },
+  "max_new_losses": {
+    "combined": {
+      "10": 1,
+      "5": 1
+    },
+    "documentation_only": {
+      "10": 1,
+      "5": 1
+    }
+  },
+  "max_unknown_questions": {
+    "combined": 1,
+    "documentation_only": 1
+  },
+  "schema_version": 1,
+  "threshold_basis": "ENGINEERING_ACCEPTANCE_NOT_VALIDATED_PERFORMANCE"
+}

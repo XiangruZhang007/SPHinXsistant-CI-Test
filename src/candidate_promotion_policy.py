@@ -221,7 +221,7 @@ def assess_automatic(project, artifact, policy, candidate_id, parent):
     from . import update_eligibility_gate as gate
     result=gate.evaluate_automatic(project,artifact,policy,candidate_id,parent)
     eligible=result['decision']=='ELIGIBLE'
-    return {'schema_version':1,'contract':'AUTOMATIC_QUALITY_V2',
+    return {'schema_version':1,'contract':result['gate_mode'],
         'decision':'APPROVED_RELEASE_ELIGIBLE' if eligible else 'PUBLICATION_BLOCKED',
         'verified':result['verified'],'P8':result['decision'],
         'production_activation':'SEPARATE_APPROVED_DRIVER_REQUIRED','authorization':'NOT_GRANTED'}

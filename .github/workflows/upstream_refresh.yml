@@ -199,6 +199,9 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       CONTINUOUS_BUILD_DEPLOYMENT_JSON: ${{ vars.CONTINUOUS_BUILD_DEPLOYMENT_JSON }}
       CONTINUOUS_BUILD_DEPLOYMENT_SHA256: ${{ vars.CONTINUOUS_BUILD_DEPLOYMENT_SHA256 }}
+      AUTOMATIC_LIFECYCLE_ENABLED: ${{ vars.AUTOMATIC_LIFECYCLE_ENABLED }}
+      AUTOMATIC_LIFECYCLE_POLICY_PATH: ${{ vars.AUTOMATIC_LIFECYCLE_POLICY_PATH }}
+      AUTOMATIC_LIFECYCLE_POLICY_SHA256: ${{ vars.AUTOMATIC_LIFECYCLE_POLICY_SHA256 }}
     steps:
       - name: Check out the exact workflow commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # verified v4
@@ -230,9 +233,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tools/treesitter-chunker/.venv/bin/python -B scripts/run_continuous_ci_v2.py --preflight-only \
-            --detection "$RUNNER_TEMP/continuous-detection/sphinxsistant_candidate/upstream_status.json" \
-            --work "$RUNNER_TEMP/continuous-work" --output "$RUNNER_TEMP/continuous-result"
+          if [ "$AUTOMATIC_LIFECYCLE_ENABLED" = true ]; then
+            tools/treesitter-chunker/.venv/bin/python -B scripts/automatic_lifecycle.py context \
+              --detection "$RUNNER_TEMP/continuous-detection/sphinxsistant_candidate/upstream_status.json" \
+              --work "$RUNNER_TEMP/continuous-result"
+          else
+            tools/treesitter-chunker/.venv/bin/python -B scripts/run_continuous_ci_v2.py --preflight-only \
+              --detection "$RUNNER_TEMP/continuous-detection/sphinxsistant_candidate/upstream_status.json" \
+              --work "$RUNNER_TEMP/continuous-work" --output "$RUNNER_TEMP/continuous-result"
+          fi
       - name: Preserve scheduled preflight or explicit failure evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # verified v4

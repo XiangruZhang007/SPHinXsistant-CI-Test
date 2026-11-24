@@ -1,0 +1,77 @@
+{
+  "basis": "OWNER_ACCEPTED_ENGINEERING_THRESHOLDS; FINAL_REFERENCE_REVIEW_PENDING",
+  "floors_rationale": "Conservative round-number lower envelope of initial Parent raw primary performance, not an optimum. Combined 60/65 and documentation 90/90 are minimum engineering utility proposals, not scientific guarantees.",
+  "historical_performance_is_not_a_validated_service_requirement": true,
+  "historical_raw_primary_counts": {
+    "base": {
+      "combined": {
+        "hit10": 58,
+        "hit5": 52,
+        "n": 84
+      },
+      "documentation_only": {
+        "hit10": 37,
+        "hit5": 37,
+        "n": 40
+      }
+    },
+    "historical": {
+      "combined": {
+        "hit10": 63,
+        "hit5": 59,
+        "n": 84
+      },
+      "documentation_only": {
+        "hit10": 38,
+        "hit5": 38,
+        "n": 40
+      }
+    }
+  },
+  "intended_use": "Research evidence discovery with source inspection; not autonomous scientific conclusions.",
+  "reference_review": "Complete technical review is prepared; limited relevance-proxy semantics and the unindexed D-01 diagnostic require explicit Owner review before integration. No automatic ground-truth approval.",
+  "regression_rationale": "At most one noncritical newly lost question per cutoff and stratum, also against the fixed initial Parent. Gross losses cannot be offset by gains. Small 40/84 denominators favor explicit counts over significance claims.",
+  "target_used_to_select_thresholds": false,
+  "thresholds": {
+    "critical_failures": 0,
+    "enabled": true,
+    "floors_percent": {
+      "combined": {
+        "10": 65,
+        "5": 60
+      },
+      "documentation_only": {
+        "10": 90,
+        "5": 90
+      }
+    },
+    "kind": "AUTOMATIC_QUALITY_V3",
+    "max_anchor_losses": {
+      "combined": {
+        "10": 1,
+        "5": 1
+      },
+      "documentation_only": {
+        "10": 1,
+        "5": 1
+      }
+    },
+    "max_new_losses": {
+      "combined": {
+        "10": 1,
+        "5": 1
+      },
+      "documentation_only": {
+        "10": 1,
+        "5": 1
+      }
+    },
+    "max_unknown_questions": {
+      "combined": 1,
+      "documentation_only": 1
+    },
+    "schema_version": 1,
+    "threshold_basis": "ENGINEERING_ACCEPTANCE_NOT_VALIDATED_PERFORMANCE"
+  },
+  "unknown_rationale": "At most one noncritical unknown primary question per stratum; all unknowns count as failure. Critical diagnostic questions are never exempt."
+}
