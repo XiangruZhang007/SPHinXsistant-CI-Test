@@ -2,6 +2,8 @@
 """Owner-dispatched credential verification; no repository-data mutation."""
 import base64
 import json
+import hashlib
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import subprocess
@@ -19,6 +21,10 @@ INSTALLATION_ID = 184185108
 WORKFLOW = '.github/workflows/ci_v2_writer_credentials.yml'
 ENVIRONMENTS = {'ci-v2-audit-writer': 28077782729, 'ci-v2-automatic-writer': 28321116175}
 PERMISSIONS = {'contents': 'write', 'metadata': 'read'}
+OBSERVATION_PATH = 'configs/ci_v2_credential_ruleset_observation.json'
+OBSERVATION_SHA256 = '9ef10a72656ada46ae8586e2f3511ec39ecb3dcd0de38f8194ae1d3b18a08381'
+RULESET_IDS = (27770139, 27793434)
+PROJECT = Path(__file__).resolve().parents[1]
 
 
 def need(condition, reason):
@@ -61,7 +67,71 @@ def api(method, path, token, body=None):
         raise ValueError('GITHUB_API_FAILED_NO_RETRY') from None
 
 
-def preflight(env, call=api):
+
+def validate_observation(value, now=None):
+    """A bounded Owner observation permits credential checks, never data writes."""
+    need(set(value) == {'schema_version', 'purpose', 'repository', 'repository_id', 'observer',
+         'source', 'reviewed_base_sha', 'observed_at', 'expires_at', 'authorization',
+         'repository_data_writes', 'rulesets'} and value['schema_version'] == 1
+         and value['purpose'] == 'CREDENTIAL_VERIFICATION_ONLY'
+         and value['repository'] == REPOSITORY and value['repository_id'] == REPOSITORY_ID
+         and value['source'] == 'AUTHENTICATED_OWNER_CLI'
+         and value['observer'] == {'id': OWNER_ID, 'login': 'XiangruZhang007', 'repository_admin_observed': True}
+         and value['authorization'] == 'NOT_GRANTED'
+         and value['repository_data_writes'] == 'NOT_AUTHORIZED', 'INVALID_OWNER_OBSERVATION')
+    need(re.fullmatch('[0-9a-f]{40}', value['reviewed_base_sha']) is not None, 'INVALID_OBSERVATION_REVISION')
+    start = datetime.strptime(value['observed_at'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+    end = datetime.strptime(value['expires_at'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+    need(start <= (now or datetime.now(timezone.utc)) < end
+         and 0 < (end - start).total_seconds() <= 21600, 'OWNER_OBSERVATION_EXPIRED_OR_INVALID')
+    rows = value['rulesets']
+    need(isinstance(rows, list) and [r.get('id') for r in rows] == list(RULESET_IDS), 'OBSERVATION_RULESET_DOMAIN_MISMATCH')
+    for row, target, kinds in zip(rows, ('ci-v2-authority-audit/*', 'ci-upstream-refresh'),
+            ({'deletion', 'non_fast_forward', 'required_linear_history'}, {'deletion', 'non_fast_forward', 'pull_request'})):
+        need(set(row) == {'id', 'target', 'enforcement', 'conditions', 'bypass_actors', 'rules'}
+             and row['target'] == 'branch' and row['enforcement'] == 'active'
+             and row['conditions'] == {'ref_name': {'include': ['refs/heads/' + target], 'exclude': []}}
+             and row['bypass_actors'] == [] and kinds <= {r.get('type') for r in row['rules']}, 'OWNER_OBSERVATION_PROTECTION_MISMATCH')
+        if row['id'] == 27793434:
+            pr = next(r['parameters'] for r in row['rules'] if r['type'] == 'pull_request')
+            need(pr.get('required_approving_review_count', 0) >= 1 and pr.get('require_code_owner_review') is True
+                 and pr.get('dismiss_stale_reviews_on_push') is True, 'CODEOWNERS_PROTECTION_REQUIRED')
+    return value
+
+
+def load_observation():
+    path = PROJECT / OBSERVATION_PATH
+    need(path.is_file() and not path.is_symlink() and path.stat().st_size <= 65536, 'OWNER_OBSERVATION_FILE_INVALID')
+    raw = path.read_bytes()
+    need(hashlib.sha256(raw).hexdigest() == OBSERVATION_SHA256, 'OWNER_OBSERVATION_PIN_MISMATCH')
+    result = subprocess.run(['git', '-C', str(PROJECT), 'merge-base', '--is-ancestor',
+        json.loads(raw)['reviewed_base_sha'], 'HEAD'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=10, check=False)
+    need(result.returncode == 0, 'OWNER_OBSERVATION_NOT_REVIEWED_ANCESTOR')
+    return validate_observation(json.loads(raw))
+
+
+def observe_rulesets(token, observation, call=api):
+    """Missing bypass is explicitly unobservable, never normalized to []."""
+    validate_observation(observation)
+    visibility = []
+    for expected in observation['rulesets']:
+        live = call('GET', '/repos/' + REPOSITORY + '/rulesets/' + str(expected['id']), token)
+        fields = ('id', 'target', 'enforcement', 'conditions', 'rules')
+        need(all(k in live and live[k] == expected[k] for k in fields), 'LIVE_RULESET_PROJECTION_CHANGED')
+        if 'bypass_actors' in live:
+            need(isinstance(live['bypass_actors'], list) and live['bypass_actors'] == expected['bypass_actors'],
+                 'LIVE_BYPASS_ACTORS_CHANGED')
+            status = 'LIVE_FIELD_PRESENT_MATCHES_OWNER_OBSERVATION'
+        else:
+            status = 'NOT_RETURNED_LIVE_BYPASS_UNVERIFIED'
+        visibility.append({'ruleset_id': expected['id'], 'bypass_observation': status})
+    return {'purpose': 'CREDENTIAL_VERIFICATION_ONLY', 'owner_observation_sha256': OBSERVATION_SHA256,
+        'owner_observation_expires_at': observation['expires_at'], 'live_ruleset_projection': 'MATCHES',
+        'bypass_visibility': visibility, 'repository_data_write_authorization': 'NOT_GRANTED'}
+
+
+def preflight(env, call=api, observation=None):
     name = env.get('WRITER_ENVIRONMENT')
     need(name in ENVIRONMENTS and env.get('GITHUB_ACTIONS') == 'true'
          and env.get('RUNNER_ENVIRONMENT') == 'github-hosted'
@@ -103,17 +173,10 @@ def preflight(env, call=api):
     need(branches.get('total_count') == 1 and len(branches.get('branch_policies', [])) == 1
          and {k: branches['branch_policies'][0].get(k) for k in ('name', 'type')} == {'name': 'ci-upstream-refresh', 'type': 'branch'},
          'ENVIRONMENT_BRANCH_MISMATCH')
-    for number, target, required in [(27770139, 'ci-v2-authority-audit/*', {'deletion', 'non_fast_forward', 'required_linear_history'}),
-                                     (27793434, 'ci-upstream-refresh', {'deletion', 'non_fast_forward', 'pull_request'})]:
-        rule = call('GET', root + '/rulesets/' + str(number), token)
-        need(rule.get('enforcement') == 'active' and rule.get('target') == 'branch'
-             and rule.get('conditions') == {'ref_name': {'include': ['refs/heads/' + target], 'exclude': []}}
-             and rule.get('bypass_actors') == [] and required <= {r.get('type') for r in rule.get('rules', [])}, 'PROTECTION_MISMATCH')
-        if number == 27793434:
-            pr = next(r['parameters'] for r in rule['rules'] if r['type'] == 'pull_request')
-            need(pr.get('required_approving_review_count', 0) >= 1 and pr.get('require_code_owner_review') is True
-                 and pr.get('dismiss_stale_reviews_on_push') is True, 'CODEOWNERS_PROTECTION_REQUIRED')
-    return {'environment': name, 'environment_id': ENVIRONMENTS[name], 'implementation_revision': env['GITHUB_SHA']}
+    observation = load_observation() if observation is None else validate_observation(observation)
+    visibility = observe_rulesets(token, observation, call)
+    return {'environment': name, 'environment_id': ENVIRONMENTS[name], 'implementation_revision': env['GITHUB_SHA'],
+        'read_only_github_token_observation': visibility}
 
 
 def jwt(private_key):
@@ -139,7 +202,9 @@ def jwt(private_key):
     return (message + b'.' + encode(result.stdout)).decode()
 
 
-def verify_credentials(app_jwt, call=api):
+def verify_credentials(app_jwt, call=api, observation=None):
+    observation = load_observation() if observation is None else validate_observation(observation)
+    capabilities = {}
     app = call('GET', '/app', app_jwt)
     need(app.get('id') == APP_ID and app.get('slug') == 'sphinxsistant-audit-writer'
          and app.get('permissions') == PERMISSIONS, 'APP_IDENTITY_OR_PERMISSION_MISMATCH')
@@ -166,13 +231,15 @@ def verify_credentials(app_jwt, call=api):
                  and repos['repositories'][0].get('full_name') == REPOSITORY, 'ACTUAL_INSTALLATION_SCOPE_MISMATCH')
             result = call('GET', '/repos/' + REPOSITORY, token)
             need(result.get('id') == REPOSITORY_ID and result.get('full_name') == REPOSITORY, 'TOKEN_UNUSABLE')
+            capabilities[label] = observe_rulesets(token, observation, call)
         finally:
             if token:
                 call('DELETE', '/installation/token', token)
     return {'status': 'WRITER_CREDENTIALS_VERIFIED', 'app_id': APP_ID, 'installation_id': INSTALLATION_ID,
         'repository': REPOSITORY, 'repository_id': REPOSITORY_ID, 'installation_permissions': PERMISSIONS,
         'full_installation_repository_count': 1, 'temporary_tokens_revoked': True,
-        'write_permission': 'ISSUANCE_VERIFIED_NO_DATA_WRITE_TEST', 'repository_data_mutations': False}
+        'write_permission': 'ISSUANCE_VERIFIED_NO_DATA_WRITE_TEST', 'repository_data_mutations': False,
+        'ruleset_observation_capabilities': capabilities, 'runtime_governance_authorization': 'NOT_GRANTED'}
 
 
 def main():
