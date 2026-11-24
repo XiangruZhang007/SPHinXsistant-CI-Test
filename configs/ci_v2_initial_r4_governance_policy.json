@@ -2,7 +2,7 @@
   "default_branch": "ci-upstream-refresh",
   "expires_at": "2026-11-25T00:00:00Z",
   "history_ruleset_id": 27770139,
-  "implementation_contract_sha256": "6e876667de5f56fc734d59cba3f0097dcee94fe70e31e1641c9557c58f97fa26",
+  "implementation_contract_sha256": "89fe1a7fc36985659f776d9e3bc66f7147e7e0e2390caaf14d9cb5884e77912b",
   "owner_id": 239840087,
   "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
   "repository_id": 1455203884,

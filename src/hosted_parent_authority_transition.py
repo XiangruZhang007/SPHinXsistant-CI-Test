@@ -21,6 +21,7 @@ from . import owner_manual_baseline_approval as owner
 from .corpus_snapshot import checked_file, digest, file_digest
 from .ci_v2_research import frozen_runtime
 from .trusted_snapshot import repository_identity
+from scripts import parent_authority_writer_bootstrap as bootstrap
 
 PROJECT = Path(__file__).resolve().parents[1]
 WORKFLOW = '.github/workflows/ci_v2_parent_authority_transition.yml'
@@ -34,6 +35,7 @@ CODE = ('src/hosted_parent_authority_transition.py',
         'src/parent_authority_git_audit.py', 'src/parent_authority_github_transport.py',
         'src/owner_managed_governance.py',
         'scripts/runtime_ruleset_observation.py',
+        'scripts/parent_authority_writer_bootstrap.py',
         'scripts/parent_authority_writer_prepare.py', 'scripts/parent_authority_writer_gate.py',
         'scripts/parent_authority_writer_execute.py',
         'src/parent_authority_transaction.py', 'scripts/parent_authority_transition_hosted.py',
@@ -56,18 +58,18 @@ def contract(project):
             'files': {name: file_digest(checked_file(project, name)) for name in CODE}}
 
 
-def subject(request, proposal_sha256, workflow_id, *, governance_policy_sha256=None):
+def subject(request, proposal_sha256, workflow_id, *, governance_policy_sha256=None,
+            bootstrap_sha256=None):
     """One nested Request is the source of all operation-specific identities."""
     transition._shape(request)
     need(transition._hash(proposal_sha256) and type(workflow_id) is int and workflow_id > 0,
          'INVALID_TRANSITION_SUBJECT')
-    value = {'schema_version': 1, 'operation': transition.OPERATION,
-            'request': deepcopy(request), 'request_sha256': digest(request),
-            'proposal_sha256': proposal_sha256, 'workflow_id': workflow_id}
     if governance_policy_sha256 is not None:
         need(transition._hash(governance_policy_sha256), 'INVALID_GOVERNANCE_SUBJECT_PIN')
-        value.update(schema_version=2, governance_policy_sha256=governance_policy_sha256)
-    return value
+    if bootstrap_sha256 is not None:
+        need(transition._hash(bootstrap_sha256), 'INVALID_BOOTSTRAP_SUBJECT_PIN')
+    return bootstrap.subject_payload(request, proposal_sha256, workflow_id,
+        governance_policy_sha256, bootstrap_sha256)
 
 
 def _deployment():
@@ -94,20 +96,27 @@ def _deployment():
         need(backend == 'UNCONFIGURED', 'UNREVIEWED_TRANSACTION_BACKEND')
     else:
         from . import parent_authority_git_audit as audit
+        initializing = bootstrap.selected(config)
+        if initializing:
+            bootstrap.validate(config)
         need(isinstance(backend, dict) and set(backend) == {'kind', 'audit',
             'history_ruleset_id', 'writer_ruleset_id', 'writer_integration_id'}
-            and backend['kind'] == 'GITHUB_GIT_AUDIT_V1'
+            and backend['kind'] in ('GITHUB_GIT_AUDIT_V1', bootstrap.KIND)
             and isinstance(backend['audit'], dict)
-            and set(backend['audit']) == audit.CONFIG_FIELDS
+            and set(backend['audit']) == audit.CONFIG_FIELDS - ({'genesis_sha'} if initializing else set())
+            and (initializing or backend['audit']['schema_version'] in (1, 2))
             and all(type(backend[k]) is int and backend[k] > 0 for k in (
                 'history_ruleset_id', 'writer_ruleset_id', 'writer_integration_id')),
             'INVALID_GITHUB_AUDIT_DEPLOYMENT')
     if config['schema_version'] == 3:
         from . import owner_managed_governance as governance
         need(isinstance(backend, dict), 'OWNER_MANAGED_BACKEND_REQUIRED')
-        governance.load(PROJECT, config)
+        policy = governance.load(PROJECT, config)
+        if bootstrap.selected(config):
+            need(policy['schema_version'] == 2, 'BOOTSTRAP_RUNTIME_OBSERVATION_REQUIRED')
     need(digest(subject(config['request'], config['proposal_sha256'], config['workflow_id'],
-         governance_policy_sha256=(config['governance']['policy_sha256'] if config['schema_version'] == 3 else None)))
+         governance_policy_sha256=(config['governance']['policy_sha256'] if config['schema_version'] == 3 else None),
+         bootstrap_sha256=(digest(backend) if bootstrap.selected(config) else None)))
          == config['subject_sha256'], 'TRANSITION_SUBJECT_PIN_MISMATCH')
     return config
 
@@ -266,6 +275,13 @@ def _inspect_github_backend(config, observed):
     """
     from . import parent_authority_git_audit as audit
     from .parent_authority_github_transport import GitHubAuditTransport
+    if bootstrap.selected(config):
+        resolved, binding, receipt = bootstrap.resolve(config, observed['workflow_run'])
+        transport = GitHubAuditTransport(resolved['transaction_backend']['audit'], binding,
+            os.environ.get('GH_TOKEN', ''))
+        transport.verify_absent_ref()
+        return {'status': 'BOOTSTRAP_REF_ABSENCE_OBSERVED', 'bootstrap': receipt,
+            'authorization': 'NOT_GRANTED', 'live_apply': False}
     backend = config['transaction_backend']
     binding = _audit_binding(config, observed)
     # A dedicated App token is separate from the Owner-observation reader token.
@@ -297,21 +313,17 @@ def run():
 
 def _audit_binding(config, observed):
     from . import parent_authority_git_audit as audit
-    r = config['request']; actor = observed['workflow_run']
-    decision = {'schema_version': 1, 'operation': transition.OPERATION,
-        'decision': 'APPROVE_RESTRICTED_BUILD_AUTHORITY_TRANSITION',
-        'proposal_sha256': config['proposal_sha256'], 'request_sha256': digest(r),
-        **{k: r[k] for k in ('transaction_id', 'repository', 'repository_id',
-            'implementation_revision', 'old_registry_sha256', 'result_registry_sha256',
-            'continuous_policy_sha256', 'workflow_path')},
-        'actor_id': actor['actor_id'], 'triggering_actor_id': actor['actor_id'],
-        'run_id': actor['run_id'], 'run_attempt': actor['run_attempt'],
-        'workflow_id': actor['workflow_id'], 'event': actor['event']}
+    actor = observed['workflow_run']
+    decision = bootstrap.decision(config, actor)
+    backend = deepcopy(config['transaction_backend'])
+    if bootstrap.selected(config):
+        backend['audit'].pop('genesis_sha', None)  # Resolved config retains the reviewed Subject.
     return audit._binding(observed['proposal'], decision,
         expected_proposal_sha256=config['proposal_sha256'],
         expected_subject_sha256=config['subject_sha256'],
         expected_actor_id=actor['actor_id'], expected_run_id=actor['run_id'],
-        governance_policy_sha256=(config['governance']['policy_sha256'] if config['schema_version'] == 3 else None))
+        governance_policy_sha256=(config['governance']['policy_sha256'] if config['schema_version'] == 3 else None),
+        bootstrap_sha256=(digest(backend) if bootstrap.selected(config) else None))
 
 
 def _writer_context(project):
@@ -462,17 +474,24 @@ def run_writer():
     result = {'status': 'BLOCKED', 'authorization': 'NOT_GRANTED', 'registry_committed': False,
         'authoritative_registry_applied': False, 'production_promotion': 'NOT_AUTHORIZED'}
     try:
-        config, observed = _writer_context(PROJECT)
+        reviewed, observed = _writer_context(PROJECT)
+        initializing = bootstrap.selected(reviewed)
+        if initializing:
+            config, predicted_binding, identity = bootstrap.resolve(reviewed, observed['workflow_run'])
+            result['bootstrap'] = {**identity, 'phase': 'PRECHECK', 'mutation_attempted': False,
+                'automatic_retry': False}
+        else:
+            config = reviewed
         backend = config['transaction_backend']; binding = _audit_binding(config, observed)
+        if initializing:
+            need(binding == predicted_binding, 'BOOTSTRAP_BINDING_MISMATCH')
         token = os.environ.get('PARENT_AUTHORITY_AUDIT_TOKEN', '')
         read_transport = GitHubAuditTransport(backend['audit'], binding, token)
-        read_transport.verify_tree()
+        if not initializing:
+            read_transport.verify_tree()
         controls = _writer_governance(read_transport, backend, config=config, project=PROJECT)  # Before APPEND exists.
         if config['schema_version'] == 3 and controls.get('complete_current_ruleset_verification') is False:
             result['ruleset_observation'] = controls['rules']
-        transport = GitHubAuditTransport(backend['audit'], binding, token, write_scope='APPEND')
-        transport.verify_tree()
-        protocol = audit._IsolatedGitProtocol(transport, backend['audit'], binding)
         temp = Path(os.environ.get('RUNNER_TEMP', ''))
         need(temp.is_absolute() and temp.resolve() == temp.absolute()
              and not temp.resolve().is_relative_to(PROJECT)
@@ -492,13 +511,44 @@ def run_writer():
         finally: os.close(fd)
         def revalidate():
             actual, observation = _writer_context(PROJECT)
-            need(actual == config, 'TRANSITION_DEPLOYMENT_CHANGED')
+            need(actual == reviewed, 'TRANSITION_DEPLOYMENT_CHANGED')
+            need(observation == observed, 'TRANSITION_AUTHORITY_CHANGED_DURING_EXECUTION')
+            if initializing:
+                resolved, actual_binding, actual_identity = bootstrap.resolve(actual, observation['workflow_run'])
+                need(resolved == config and actual_binding == binding and actual_identity == identity,
+                    'BOOTSTRAP_RUN_BINDING_CHANGED')
             _writer_governance(read_transport, backend, config=config, project=PROJECT)
             return observation
+        if initializing:
+            # Real App-token governance (including GraphQL where needed) above
+            # and again here must succeed before any INITIALIZE transport exists.
+            revalidate()
+            read_transport.verify_absent_ref()
+            result['bootstrap'].update(phase='CREATE_GENESIS', mutation_attempted=True)
+            creator = GitHubAuditTransport(backend['audit'], binding, token, write_scope='INITIALIZE')
+            creator.create_genesis(deepcopy(bootstrap.PERSON))
+            revalidate()
+            read_transport.verify_absent_ref()
+            result['bootstrap']['phase'] = 'INITIALIZE_REF'
+            # Each primitive is one-shot; never reuse creator or reset its state.
+            initializer = GitHubAuditTransport(backend['audit'], binding, token, write_scope='INITIALIZE')
+            initializer.initialize_ref()
+            read_transport.verify_tree()
+            need(audit._IsolatedGitProtocol(read_transport, backend['audit'], binding).inspect()['status']
+                 == 'NOT_RESERVED_REVIEW_REQUIRED', 'BOOTSTRAP_INITIAL_STATE_UNVERIFIED')
+            result['bootstrap']['phase'] = 'VERIFIED'
+        transport = GitHubAuditTransport(backend['audit'], binding, token, write_scope='APPEND')
+        transport.verify_tree()
+        protocol = audit._IsolatedGitProtocol(transport, backend['audit'], binding)
         executed = _execute_transaction(PROJECT, isolation, config, observed, protocol, _revalidate=revalidate)
+        if initializing:
+            executed['bootstrap'] = result['bootstrap']
         if 'ruleset_observation' in result:
             executed['ruleset_observation'] = result['ruleset_observation']
         return executed
     except Exception as error:
+        if result.get('bootstrap', {}).get('mutation_attempted'):
+            result.update(status='STATE_UNCERTAIN', automatic_retry=False,
+                reconciliation='OWNER_READ_ONLY_RECONCILIATION_REQUIRED')
         result['reason'] = str(error) if isinstance(error, (transition.TransitionError, audit.AuditError, owner.OwnerApprovalError, ValueError)) and re.fullmatch('[A-Z][A-Z0-9_]{0,100}', str(error)) else 'WRITER_VERIFICATION_FAILED'
     return result

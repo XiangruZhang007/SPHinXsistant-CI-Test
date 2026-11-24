@@ -24,6 +24,10 @@ def prepare():
         'subject_sha256': config['subject_sha256'],
         'implementation_contract_sha256': config['implementation_contract_sha256'],
         'workflow_run': actor}
+    if hosted.bootstrap.selected(config):
+        _, binding, identity = hosted.bootstrap.resolve(config, actor)
+        hosted.need(binding == hosted._audit_binding(config, observed), 'BOOTSTRAP_BINDING_MISMATCH')
+        receipt['bootstrap'] = identity
     files = hosted.contract(PROJECT)['files']
     return receipt, files
 

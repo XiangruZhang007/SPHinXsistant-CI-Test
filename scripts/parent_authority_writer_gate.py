@@ -61,7 +61,8 @@ class GitHubRead:
 def checkout(project, revision, files):
     critical = {WORKFLOW, '.github/CODEOWNERS', 'src/hosted_parent_authority_transition.py',
                 'scripts/parent_authority_writer_prepare.py', 'scripts/parent_authority_writer_gate.py',
-                'scripts/parent_authority_writer_execute.py', 'scripts/runtime_ruleset_observation.py'}
+                'scripts/parent_authority_writer_execute.py', 'scripts/runtime_ruleset_observation.py',
+                'scripts/parent_authority_writer_bootstrap.py'}
     need(isinstance(files, dict) and critical <= files.keys(), 'WRITER_CODE_MANIFEST_INCOMPLETE')
     for name, pin in files.items():
         need(isinstance(name, str) and not Path(name).is_absolute()
@@ -155,6 +156,14 @@ def verify(env, project, api):
         'actor_id':OWNER_ID,'run_id':run_id,'run_attempt':1,'workflow_id':config['workflow_id'],
         'workflow_path':WORKFLOW,'commit_sha':sha,'event':'workflow_dispatch'}.items()),
         'WRITER_OWNER_PREPARATION_RUN_MISMATCH')
+    sys.path.insert(0, str(PROJECT / 'scripts'))
+    import parent_authority_writer_bootstrap as bootstrap
+    if bootstrap.selected(config):
+        need(runtime_evidence is not None, 'BOOTSTRAP_RUNTIME_OBSERVATION_REQUIRED')
+        _, _, identity = bootstrap.resolve(config, actor)
+        need(receipt.get('bootstrap') == identity, 'WRITER_BOOTSTRAP_PREPARATION_MISMATCH')
+    else:
+        need('bootstrap' not in receipt, 'WRITER_UNEXPECTED_BOOTSTRAP_RECEIPT')
     jobs = api(base + '/actions/runs/' + str(run_id) + '/attempts/1/jobs?per_page=100')
     need(jobs.get('total_count', 101) <= 100, 'WRITER_JOB_INVENTORY_INCOMPLETE')
     prepare_jobs = [j for j in jobs.get('jobs', []) if j.get('name') == 'inspect-transition']

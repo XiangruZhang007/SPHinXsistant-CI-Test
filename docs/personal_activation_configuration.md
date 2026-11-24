@@ -73,16 +73,72 @@ The proposal commit is a real revision, but must not be represented as that
 future merge. Final Request/Proposal/Subject/dispatch digests will be recomputed
 from the actual merge before concrete execution approval.
 
-No audit refs existed at initialization readback. Existing R4 requires its
-single-use audit genesis to bind the actual authenticated Owner run/decision.
-That run ID does not exist before dispatch. The existing transport has bounded
-`create_genesis` and `initialize_ref` primitives, but the manual Hosted Writer
-entry only opens APPEND after validating a pre-existing genesis; it does not
-expose a one-time initialization entry. Therefore a reviewed bootstrap execution
-path and actual run-bound genesis approval remain prerequisites. This PR does
-not invent a genesis SHA, bypass that requirement, add a new initializer or
-change reserve/consume/APPLY/complete. This is an actual remaining integration
-dependency, not a demand to execute a Writer before creating Ruleset B.
+No audit refs existed at initialization readback. This PR now implements the
+approved minimal first-run integration in the existing manual Writer. The
+externally pinned `GITHUB_GIT_AUDIT_V1` mode still requires its exact pre-existing
+genesis. The new explicit backend below omits `genesis_sha` before dispatch:
+
+```json
+{
+  "kind": "GITHUB_GIT_AUDIT_OWNER_RUN_BOOTSTRAP_V1",
+  "audit": {
+    "schema_version": 3,
+    "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
+    "repository_id": 1455203884,
+    "ref": "refs/heads/ci-v2-authority-audit/ed20b392594046db84a6f2306053440e",
+    "tree_sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "governance_sha256": "da7ec16e65c9cfdcde34af6ab244d35df3ba313dc011abed9a81623ae67fe344"
+  },
+  "history_ruleset_id": 27770139,
+  "writer_ruleset_id": 27974931,
+  "writer_integration_id": 5855475
+}
+```
+
+Deployment remains schema 3 with the raw-pinned existing governance policy.
+Subject schema 3 additionally pins the canonical backend digest. Preparation
+authenticates the actual Owner workflow run, Request and Proposal, then derives
+the genesis identity. The genesis payload includes the complete run/decision
+binding digest, including the reviewed Subject; different runs yield different
+genesis objects. The fixed author/committer (`CI V2 R4 Writer`,
+`ci-v2-r4-writer@users.noreply.github.com`, `2000-01-01T00:00:00Z`) is Git object
+metadata, not an authorization claim. SHA-1 uses the exact Git commit encoding.
+No invented run ID, placeholder SHA or pre-existing tree/ref is required by
+preparation or the pre-token gate. The gate independently repeats the identity
+derivation against the authenticated run and preparation receipt.
+
+After existing manual Environment approval, the existing installation-token
+action and token-scope checks remain. Before any initialization write, the Writer
+must observe live governance using the actual App token and prove ref absence
+with both GET-ref 404 and an empty matching-ref inventory. When REST omits B's
+update parameters, the existing fixed GraphQL query must return explicit false
+using each runtime token that needs this observation. Owner CLI success is not
+Hosted GITHUB_TOKEN or App-token capability evidence. The earlier credential
+verification did not measure GraphQL; genuine Hosted capability is still
+unmeasured. This integrated read-only prerequisite will fail closed before any
+Git object/ref write if either required token cannot make the observation.
+
+The first fresh INITIALIZE instance calls `create_genesis`, verifies the exact
+predicted SHA and reads the object back. Context/governance and absence are
+checked again, then a second fresh INITIALIZE instance calls `initialize_ref`.
+Neither instance's one-shot restriction is reset or bypassed. Exact genesis/ref
+readback and an empty protocol state precede APPEND. The existing
+reserve/consume/isolated APPLY/complete path and effectful revalidation boundaries
+then run unchanged. Existing token revocation remains enabled. Any ambiguous
+initialization result stops without retry, adoption, reset or APPEND, preserving
+evidence for Owner read-only reconciliation.
+
+Implementation approval does not authorize this bootstrap or R4 execution. The
+review packet must be rebound to the actual protected merge, then explicitly
+approved together with the exact three R4 Variables and Owner dispatch inputs.
+That execution scope would permit only empty-tree/root/ref initialization on the
+ref above and the existing three audit APPEND events plus isolated APPLY. It
+would not permit an authoritative Registry commit, derived initialization,
+Release publication, lifecycle activation, ref deletion/reset or production work.
+The actual run-bound genesis SHA is recorded after dispatch by preparation and
+must match the Writer's independent derivation and remote readback. Protected
+Registry integration remains a separately reviewed result after genuine R4
+completion. No authoritative Registry integration is inferred from isolated APPLY.
 
 Derived Registry content will be the exact protected R4 result plus
 `DERIVED_PARENT_LINEAGE_V1` with an empty entries list, using the existing
@@ -110,7 +166,7 @@ Owner registration Variables remain unchanged.
 | Variable | Proposed value after concrete approval |
 | --- | --- |
 | `PARENT_AUTHORITY_WRITER_PREPARATION_ENABLED` | `true`, only with the exact reviewed R4 deployment and usable bootstrap |
-| `PARENT_AUTHORITY_TRANSITION_DEPLOYMENT_JSON` | Final Request/Proposal/Subject/audit bindings after actual merge/run identity |
+| `PARENT_AUTHORITY_TRANSITION_DEPLOYMENT_JSON` | Final Request/Proposal/Subject and explicit bootstrap backend after actual protected merge; genesis is deterministically bound to the later authenticated run |
 | `PARENT_AUTHORITY_TRANSITION_DEPLOYMENT_SHA256` | SHA-256 of those exact JSON bytes |
 | `CONTINUOUS_BUILD_DEPLOYMENT_JSON` | Existing schema 4 deployment, actual protected authorized root and completion authority |
 | `CONTINUOUS_BUILD_DEPLOYMENT_SHA256` | SHA-256 of its finalized exact bytes |

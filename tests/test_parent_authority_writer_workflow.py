@@ -86,7 +86,12 @@ class WriterWorkflowTests(unittest.TestCase):
             if isinstance(node,ast.Import):roots.update(x.name.split('.')[0] for x in node.names)
             if isinstance(node,ast.ImportFrom):roots.add(node.module.split('.')[0])
         self.assertTrue(roots<={'hashlib','json','os','pathlib','re','subprocess','sys',
-                               'runtime_ruleset_observation'})
+                               'runtime_ruleset_observation','parent_authority_writer_bootstrap'})
+        bootstrap_tree=ast.parse((P/'scripts/parent_authority_writer_bootstrap.py').read_text())
+        for node in ast.walk(bootstrap_tree):
+            if isinstance(node,ast.Import):
+                self.assertTrue({x.name for x in node.names}<={'hashlib','json','re'})
+            if isinstance(node,ast.ImportFrom):self.assertEqual(node.module,'copy')
         helper=ast.parse((P/'scripts/runtime_ruleset_observation.py').read_text())
         helper_roots=set()
         for node in ast.walk(helper):
@@ -244,7 +249,8 @@ class WriterGateTests(unittest.TestCase):
         files={}
         for name in (gate.WORKFLOW,'.github/CODEOWNERS','src/hosted_parent_authority_transition.py',
                      'scripts/parent_authority_writer_prepare.py','scripts/parent_authority_writer_gate.py',
-                     'scripts/parent_authority_writer_execute.py','scripts/runtime_ruleset_observation.py'):
+                     'scripts/parent_authority_writer_execute.py','scripts/runtime_ruleset_observation.py',
+                     'scripts/parent_authority_writer_bootstrap.py'):
             p=self.root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('synthetic\n')
             files[name]=hashlib.sha256(p.read_bytes()).hexdigest()
         def git(*a):return subprocess.check_output(['git','--no-optional-locks','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-C',str(self.root),*a],stderr=subprocess.PIPE)
