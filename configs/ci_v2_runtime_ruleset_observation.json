@@ -1,0 +1,117 @@
+{
+  "default_branch": "ci-upstream-refresh",
+  "default_ruleset_id": 27793434,
+  "expires_at": "2026-12-09T00:00:00Z",
+  "history_ruleset_id": 27770139,
+  "kind": "OWNER_RUNTIME_RULESET_OBSERVATION_V1",
+  "observed_at": "2026-11-24T09:59:27Z",
+  "observer": {
+    "id": 239840087,
+    "login": "XiangruZhang007",
+    "repository_admin_observed": true
+  },
+  "owner_id": 239840087,
+  "purpose": "RUNTIME_GOVERNANCE_POLICY_INPUT",
+  "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
+  "repository_id": 1455203884,
+  "rulesets": [
+    {
+      "bypass_actors": [],
+      "conditions": {
+        "ref_name": {
+          "exclude": [],
+          "include": [
+            "refs/heads/ci-v2-authority-audit/*"
+          ]
+        }
+      },
+      "enforcement": "active",
+      "id": 27770139,
+      "rules": [
+        {
+          "type": "deletion"
+        },
+        {
+          "type": "non_fast_forward"
+        },
+        {
+          "type": "required_linear_history"
+        }
+      ],
+      "target": "branch"
+    },
+    {
+      "bypass_actors": [
+        {
+          "actor_id": 5855475,
+          "actor_type": "Integration",
+          "bypass_mode": "always"
+        }
+      ],
+      "conditions": {
+        "ref_name": {
+          "exclude": [],
+          "include": [
+            "refs/heads/ci-v2-authority-audit/*"
+          ]
+        }
+      },
+      "enforcement": "active",
+      "id": 27974931,
+      "rules": [
+        {
+          "type": "creation"
+        },
+        {
+          "parameters": {
+            "update_allows_fetch_and_merge": false
+          },
+          "type": "update"
+        }
+      ],
+      "target": "branch"
+    },
+    {
+      "bypass_actors": [],
+      "conditions": {
+        "ref_name": {
+          "exclude": [],
+          "include": [
+            "refs/heads/ci-upstream-refresh"
+          ]
+        }
+      },
+      "enforcement": "active",
+      "id": 27793434,
+      "rules": [
+        {
+          "type": "deletion"
+        },
+        {
+          "type": "non_fast_forward"
+        },
+        {
+          "parameters": {
+            "allowed_merge_methods": [
+              "merge",
+              "squash",
+              "rebase"
+            ],
+            "dismiss_stale_reviews_on_push": true,
+            "require_code_owner_review": true,
+            "require_extra_approval_for_unattributed_changes": true,
+            "require_last_push_approval": false,
+            "required_approving_review_count": 1,
+            "required_review_thread_resolution": true,
+            "required_reviewers": []
+          },
+          "type": "pull_request"
+        }
+      ],
+      "target": "branch"
+    }
+  ],
+  "schema_version": 1,
+  "writer_integration_id": 5855475,
+  "writer_ruleset_id": 27974931
+}

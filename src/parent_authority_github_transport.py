@@ -1,9 +1,9 @@
 """Bounded GitHub Git Database transport for the existing B4.1 protocol.
 
 A transport credential is not Owner authorization. Writes are private, explicitly
-scoped primitives for future controlled provisioning/protocol integration. The
-Hosted entry uses this transport READ ONLY until independent governance and
-writer isolation are established. No retry, redirect, reset or delete is offered.
+scoped primitives. The Hosted entry separately authenticates the reviewed run,
+Writer and versioned governance contract before choosing a mutation scope.
+No retry, redirect, reset or delete is offered.
 """
 from copy import deepcopy
 import hashlib
@@ -33,7 +33,7 @@ class GitHubAuditTransport:
     None is read-only; INITIALIZE permits only empty-tree/root/ref provisioning;
     APPEND permits only canonical single-parent protocol commits + force=false.
     Callers must obtain separate operation authorization before choosing a scope.
-    The Hosted entry never chooses either write scope in this implementation.
+    Scope selection does not replace the Hosted entry's authorization checks.
     """
     def __init__(self, config, binding, token, *, write_scope=None):
         # Reuse the actual protocol's complete config/binding shape validation.
@@ -215,17 +215,22 @@ class GitHubAuditTransport:
                     and audit._parse(obj.get('message')) == audit._genesis(self.config, self.binding),
                     'AUDIT_GENESIS_MISMATCH')
 
-    def initialize_ref(self):
-        """Explicit one-shot provision; never called automatically by reserve()."""
-        audit._need(self._scope == 'INITIALIZE' and not self._initialization_attempted,
-                    'AUDIT_INITIALIZATION_NOT_AUTHORIZED')
-        self._initialization_attempted = True
+    def verify_absent_ref(self):
+        """Read-only absence proof before provisioning any Git object."""
         status, repo = self.request('GET', self._prefix)
         audit._need(status == 200, 'AUDIT_REPOSITORY_UNAVAILABLE')
         status, existing = self.request('GET', self._prefix + '/git/ref/' + self.config['ref'][5:])
         audit._need(status == 404 and not self._seen_ref, 'AUDIT_REF_NOT_PROVEN_ABSENT')
         status, matching = self.request('GET', self._prefix + '/git/matching-refs/' + self.config['ref'][5:])
         audit._need(status == 200 and matching == [], 'AUDIT_REF_NOT_PROVEN_ABSENT')
+        return {'status': 'AUDIT_REF_PROVEN_ABSENT', 'authorization': 'NOT_GRANTED'}
+
+    def initialize_ref(self):
+        """Explicit one-shot provision; never called automatically by reserve()."""
+        audit._need(self._scope == 'INITIALIZE' and not self._initialization_attempted,
+                    'AUDIT_INITIALIZATION_NOT_AUTHORIZED')
+        self._initialization_attempted = True
+        self.verify_absent_ref()
         self._verify_genesis()
         self._ref_creation_ready = True
         status, result = self.request('POST', self._prefix + '/git/refs', {
@@ -256,7 +261,8 @@ class GitHubAuditTransport:
                 status, rule = self.request('GET', self._prefix + '/rulesets/' + str(number))
                 audit._need(status == 200, 'AUDIT_GOVERNANCE_UNAVAILABLE')
                 return rule
-            return observation.observe(evidence, read)
+            return observation.observe(evidence, read,
+                update_read=lambda node, number: observation.live_update(self._token, node, number))
         rulesets = []
         for number in (history_id, writer_id):
             status, rule = self.request('GET', self._prefix + '/rulesets/' + str(number))

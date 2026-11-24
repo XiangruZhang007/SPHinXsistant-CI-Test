@@ -84,6 +84,20 @@ verification. Observation/revalidation also does not provide atomic protection
 against control-plane changes between API reads and writes. Owner-managed trust
 and the existing rollback limitation remain explicit.
 
+Actual B bootstrap readback (27974931) exposed a separate REST serialization
+case: GitHub omits `update.parameters` even though an authenticated Owner
+GraphQL query explicitly returns `updateAllowsFetchAndMerge=false`. Runtime
+accepts this exact omission only after a fixed read-only GraphQL query with the
+same runtime token verifies the exact Ruleset database ID, complete two-rule
+inventory and an explicit boolean false. Unavailable/error/partial/malformed
+GraphQL results or a true value block. This never substitutes false for an
+omission and does not query or fill missing bypass lists. The report labels
+`LIVE_GRAPHQL_FALSE_REST_PARAMETERS_OMITTED` separately. Existing App token
+GraphQL capability will be established at the actual runtime gate; the Owner
+readback is not claimed as Hosted evidence. No new permission or credential is
+needed or assumed. Full history is fetched in the two automatic jobs that use
+the existing protected-root ancestry check.
+
 ## Bootstrap and remaining concrete approvals
 
 1. Review and merge this implementation through protected CODEOWNERS review.

@@ -1,0 +1,23 @@
+{
+  "default_branch": "ci-upstream-refresh",
+  "expires_at": "2026-11-25T00:00:00Z",
+  "history_ruleset_id": 27770139,
+  "implementation_contract_sha256": "89fe1a7fc36985659f776d9e3bc66f7147e7e0e2390caaf14d9cb5884e77912b",
+  "owner_id": 239840087,
+  "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
+  "repository_id": 1455203884,
+  "risk_acceptance": "OWNER_CAN_CHANGE_RULES_AND_ROLL_BACK_BETWEEN_OBSERVATIONS",
+  "ruleset_observation": {
+    "evidence_path": "configs/ci_v2_runtime_ruleset_observation.json",
+    "evidence_sha256": "928a17f1a8f127ea6669bf3a4728f2451625fa24cd76aca93ef474e4898c2334",
+    "mode": "OWNER_PINNED_WITH_LIVE_PUBLIC_PROJECTION",
+    "operation": "MANUAL_R4",
+    "risk_acceptance": "CURRENT_BYPASS_CONFIGURATION_UNVERIFIABLE"
+  },
+  "schema_version": 2,
+  "trust_model": "OWNER_MANAGED_GOVERNANCE_V1",
+  "valid_from": "2026-11-24T09:59:27Z",
+  "workflow_path": ".github/workflows/ci_v2_parent_authority_transition.yml",
+  "writer_integration_id": 5855475,
+  "writer_ruleset_id": 27974931
+}

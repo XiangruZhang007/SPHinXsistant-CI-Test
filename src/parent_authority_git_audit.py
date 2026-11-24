@@ -50,7 +50,8 @@ def backend_status():
 
 
 def _binding(proposal, decision, *, expected_proposal_sha256, expected_subject_sha256,
-             expected_actor_id, expected_run_id, governance_policy_sha256=None):
+             expected_actor_id, expected_run_id, governance_policy_sha256=None,
+             bootstrap_sha256=None):
     """Reuse B3 consistency validation, explicitly NOT Owner authentication."""
     r = proposal['request']
     transition.inspect_owner_decision(proposal, decision,
@@ -60,7 +61,7 @@ def _binding(proposal, decision, *, expected_proposal_sha256, expected_subject_s
     # Reuse the actual B4 Subject contract, without running its API observer.
     from .hosted_parent_authority_transition import subject
     _need(digest(subject(r, expected_proposal_sha256, decision['workflow_id'],
-          governance_policy_sha256=governance_policy_sha256))
+          governance_policy_sha256=governance_policy_sha256, bootstrap_sha256=bootstrap_sha256))
           == expected_subject_sha256, 'AUDIT_SUBJECT_MISMATCH')
     return {'request_sha256': proposal['request_sha256'],
             'proposal_sha256': expected_proposal_sha256,
@@ -81,6 +82,9 @@ def _scope(config, binding):
 
 
 def _genesis(config, binding):
+    if config['schema_version'] == 3:
+        from scripts.parent_authority_writer_bootstrap import genesis
+        return genesis(config, binding)
     return {'schema_version': 1, 'protocol': PROTOCOL,
             'domain': {k: config[k] for k in CONFIG_FIELDS - {'genesis_sha'}},
             'transaction': _scope(config, binding)}
@@ -123,7 +127,7 @@ class _IsolatedGitProtocol:
         self._binding = deepcopy(binding)
         c, b = self._config, self._binding
         _need(isinstance(c, dict) and set(c) == CONFIG_FIELDS
-              and type(c['schema_version']) is int and c['schema_version'] in (1, 2),
+              and type(c['schema_version']) is int and c['schema_version'] in (1, 2, 3),
               'INVALID_AUDIT_CONFIG')
         fields = POLICY_BINDING_FIELDS if c['schema_version'] == 2 else BINDING_FIELDS
         _need(isinstance(b, dict) and set(b) == fields, 'INVALID_AUDIT_BINDING')

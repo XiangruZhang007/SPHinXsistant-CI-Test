@@ -1,0 +1,17 @@
+{
+  "automatic_registration": false,
+  "continuous_policy_sha256": "564faec69dbaf7d006f9645e28ee206dc1093c3d55498c229e742c350eb6640b",
+  "enabled": true,
+  "expires_at": "2026-12-09T00:00:00Z",
+  "operation": "SCHEDULED_CONTINUOUS_CANDIDATE_BUILD",
+  "production_promotion": "NOT_AUTHORIZED",
+  "publication_enabled": true,
+  "registry_sha256": "e7290b4465cc1512aea37c2accd5cdcf357e967947ca567137c165195d3cb187",
+  "release_prefix": "ci-v2-continuous-completion",
+  "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
+  "repository_id": 1455203884,
+  "research_approval": "NOT_GRANTED",
+  "schema_version": 1,
+  "valid_from": "2026-11-24T09:59:27Z",
+  "workflow_path": ".github/workflows/upstream_refresh.yml"
+}

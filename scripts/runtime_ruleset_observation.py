@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import urllib.request
 
 MODE = 'OWNER_PINNED_WITH_LIVE_PUBLIC_PROJECTION'
 MODEL = 'OWNER_MANAGED_GOVERNANCE_V1'
@@ -40,6 +41,47 @@ def canonical(value):
 
 def digest(value):
     return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def live_update(token, node_id, number):
+    """Fixed read-only GraphQL query; omitted REST parameters never mean false."""
+    need(isinstance(token, str) and bool(token) and not any(c.isspace() for c in token)
+         and isinstance(node_id, str) and re.fullmatch('[A-Za-z0-9_=:-]{1,160}', node_id)
+         and type(number) is int and number > 0, 'RUNTIME_UPDATE_QUERY_IDENTITY_REQUIRED')
+    query = 'query RuntimeUpdate($id: ID!) { node(id: $id) { ... on RepositoryRuleset { databaseId rules(first: 100) { nodes { type parameters { __typename ... on UpdateParameters { updateAllowsFetchAndMerge } } } pageInfo { hasNextPage } } } } }'
+    request = urllib.request.Request('https://api.github.com/graphql', method='POST',
+        data=canonical({'query': query, 'variables': {'id': node_id}}), headers={
+            'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json',
+            'Content-Type': 'application/json', 'User-Agent': 'SPHinXsistant-runtime-observation'})
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+    try:
+        with urllib.request.build_opener(NoRedirect()).open(request, timeout=15) as response:
+            need(response.geturl() == 'https://api.github.com/graphql', 'RUNTIME_UPDATE_REDIRECT_DENIED')
+            raw = response.read(256 * 1024 + 1)
+        need(len(raw) <= 256 * 1024, 'RUNTIME_UPDATE_RESPONSE_TOO_LARGE')
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                need(key not in result, 'INVALID_RUNTIME_UPDATE_JSON')
+                result[key] = value
+            return result
+        value = json.loads(raw, object_pairs_hook=unique,
+            parse_constant=lambda _: need(False, 'INVALID_RUNTIME_UPDATE_JSON'))
+        need(isinstance(value, dict) and not value.get('errors'), 'RUNTIME_UPDATE_QUERY_FAILED')
+        node = value['data']['node']
+        need(type(node['databaseId']) is int and node['databaseId'] == number
+             and node['rules']['pageInfo']['hasNextPage'] is False, 'RUNTIME_UPDATE_QUERY_SCOPE_MISMATCH')
+        rows = node['rules']['nodes']
+        need(isinstance(rows, list) and len(rows) == 2
+             and sorted(r['type'] for r in rows) == ['CREATION', 'UPDATE'], 'RUNTIME_UPDATE_QUERY_RULES_MISMATCH')
+        params = next(r['parameters'] for r in rows if r['type'] == 'UPDATE')
+        need(isinstance(params, dict) and params.get('__typename') == 'UpdateParameters'
+             and type(params.get('updateAllowsFetchAndMerge')) is bool, 'RUNTIME_UPDATE_PARAMETER_UNVERIFIED')
+        return params['updateAllowsFetchAndMerge']
+    except Exception:
+        raise ValueError('RUNTIME_UPDATE_PARAMETER_UNVERIFIED') from None
 
 
 def time(value):
@@ -168,15 +210,26 @@ def load(project, policy, *, default_branch, governance_sha256, operation, now=N
     return evidence
 
 
-def observe(evidence, read):
+def observe(evidence, read, *, update_read=None):
     """GET A/B/default; never fill omitted live fields from historical evidence."""
-    visibility = []
+    visibility = []; update_observation = 'EXPLICIT_REST_PARAMETERS'
     for expected in evidence['rulesets']:
         live = read(expected['id'])
         need(isinstance(live, dict) and all(k in live for k in ROW - {'bypass_actors'}),
              'RUNTIME_LIVE_RULESET_MALFORMED')
+        projection = {k: live[k] for k in ROW - {'bypass_actors'}}
+        if expected['id'] == evidence['writer_ruleset_id'] and live['rules'] == [{'type': 'creation'}, {'type': 'update'}]:
+            need(callable(update_read) and isinstance(live.get('node_id'), str),
+                 'RUNTIME_UPDATE_PARAMETER_UNVERIFIED')
+            actual = update_read(live['node_id'], expected['id'])
+            need(actual is False, 'RUNTIME_UPDATE_PARAMETER_UNSAFE')
+            # This value is an actual authenticated GraphQL observation, not a
+            # default substituted for a missing field. Keep live REST untouched.
+            projection['rules'] = [{'type': 'creation'}, {'type': 'update',
+                'parameters': {'update_allows_fetch_and_merge': actual}}]
+            update_observation = 'LIVE_GRAPHQL_FALSE_REST_PARAMETERS_OMITTED'
         # Canonical bytes distinguish bool/int/null and reject non-finite JSON.
-        need(canonical({k: live[k] for k in ROW - {'bypass_actors'}})
+        need(canonical(projection)
              == canonical({k: expected[k] for k in ROW - {'bypass_actors'}}),
              'RUNTIME_PUBLIC_RULESET_DRIFT')
         if 'bypass_actors' in live:
@@ -191,6 +244,7 @@ def observe(evidence, read):
         'owner_evidence_canonical_sha256': digest(evidence), 'owner_observed_at': evidence['observed_at'],
         'owner_evidence_expires_at': evidence['expires_at'], 'live_ruleset_projection': 'MATCHES',
         'bypass_visibility': visibility, 'complete_current_ruleset_verification': False,
+        'update_parameters_observation': update_observation,
         'risk_acceptance': RISK, 'authorization': 'NOT_GRANTED'}
 
 

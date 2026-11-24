@@ -1,0 +1,49 @@
+{
+  "automatic_registration": false,
+  "automatic_research_approval": false,
+  "automatic_reuse": false,
+  "build_fingerprint": "7f66fe80e92d7263d5147d4fea551855184af75829f5b62993eb162acceb0cd8",
+  "eligible_parents": [
+    {
+      "expected_reference_sha256": "83df3259b292e3e0323b19fbe1bb5b01afd4f74cfdb8b96f452b1da2468d8724",
+      "key": "official-research-parent-9519233d",
+      "node_id": "sha256-9519233d556d62ae8660d340a8f9792d3058c44ec6d975864f3b1a1619e23767",
+      "package_checksum": "c7a23c15cace0f228214b448aafd5241427723f3a9c72283c2bbc39034133823"
+    }
+  ],
+  "enabled": true,
+  "expires_at": "2026-12-09T00:00:00Z",
+  "max_advance_commits": 256,
+  "mode": "CONTINUOUS_SCOPE",
+  "operation": "BUILD_CANDIDATE",
+  "orchestration_fingerprint": "f85870083f2c6ac5006026561b450b014c842df672523c79f0b54774a63bd905",
+  "policy_id": "official-parent-personal-activation",
+  "production_promotion": "NOT_AUTHORIZED",
+  "requirements": {
+    "p8": "BLOCKED",
+    "parent_qualification": "P4_1_AND_FRESH_PARENT_R2",
+    "q1": "PRESERVE_VERSION_PAIR_QUALIFICATION",
+    "relationships": "SAME_OR_FAST_FORWARD",
+    "retrieval": "FROZEN_R2_AND_INDEPENDENT_REPLAY",
+    "source_verification": "CLEAN_GIT_TREE_BLOBS_AND_SOURCE_STATE",
+    "structural_parity": "INDEPENDENT_FULL_BUILD_REQUIRED"
+  },
+  "research_baseline_created": false,
+  "research_only": true,
+  "retrieval_quality": "QUALITY_REVIEW_REQUIRED",
+  "scheduled_execution": false,
+  "schema_version": 1,
+  "upstreams": {
+    "SPHinXsim": {
+      "branch": "main",
+      "repository_id": 1169919490,
+      "url": "https://github.com/Xiangyu-Hu/SPHinXsim.git"
+    },
+    "SPHinXsys": {
+      "branch": "master",
+      "repository_id": 189070140,
+      "url": "https://github.com/Xiangyu-Hu/SPHinXsys.git"
+    }
+  },
+  "valid_from": "2026-11-24T09:59:27Z"
+}
