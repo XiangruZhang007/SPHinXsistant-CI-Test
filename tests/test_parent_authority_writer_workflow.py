@@ -85,7 +85,14 @@ class WriterWorkflowTests(unittest.TestCase):
         for node in ast.walk(tree):
             if isinstance(node,ast.Import):roots.update(x.name.split('.')[0] for x in node.names)
             if isinstance(node,ast.ImportFrom):roots.add(node.module.split('.')[0])
-        self.assertTrue(roots<={'hashlib','json','os','pathlib','re','subprocess','sys'})
+        self.assertTrue(roots<={'hashlib','json','os','pathlib','re','subprocess','sys',
+                               'runtime_ruleset_observation'})
+        helper=ast.parse((P/'scripts/runtime_ruleset_observation.py').read_text())
+        helper_roots=set()
+        for node in ast.walk(helper):
+            if isinstance(node,ast.Import):helper_roots.update(x.name.split('.')[0] for x in node.names)
+            if isinstance(node,ast.ImportFrom):helper_roots.add(node.module.split('.')[0])
+        self.assertTrue(helper_roots<={'datetime','hashlib','json','pathlib','re','os','subprocess'})
         self.assertNotIn('PRIVATE_KEY',(P/'scripts/parent_authority_writer_gate.py').read_text())
         for prefix in ('/.github/','/scripts/','/src/','/configs/'):
             self.assertIn(prefix,(P/'.github/CODEOWNERS').read_text())
@@ -237,7 +244,7 @@ class WriterGateTests(unittest.TestCase):
         files={}
         for name in (gate.WORKFLOW,'.github/CODEOWNERS','src/hosted_parent_authority_transition.py',
                      'scripts/parent_authority_writer_prepare.py','scripts/parent_authority_writer_gate.py',
-                     'scripts/parent_authority_writer_execute.py'):
+                     'scripts/parent_authority_writer_execute.py','scripts/runtime_ruleset_observation.py'):
             p=self.root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('synthetic\n')
             files[name]=hashlib.sha256(p.read_bytes()).hexdigest()
         def git(*a):return subprocess.check_output(['git','--no-optional-locks','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-C',str(self.root),*a],stderr=subprocess.PIPE)

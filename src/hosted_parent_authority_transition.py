@@ -33,6 +33,7 @@ CODE = ('src/hosted_parent_authority_transition.py',
         '.github/CODEOWNERS',
         'src/parent_authority_git_audit.py', 'src/parent_authority_github_transport.py',
         'src/owner_managed_governance.py',
+        'scripts/runtime_ruleset_observation.py',
         'scripts/parent_authority_writer_prepare.py', 'scripts/parent_authority_writer_gate.py',
         'scripts/parent_authority_writer_execute.py',
         'src/parent_authority_transaction.py', 'scripts/parent_authority_transition_hosted.py',
@@ -274,8 +275,14 @@ def _inspect_github_backend(config, observed):
     transport.verify_tree()
     state = audit._IsolatedGitProtocol(transport, backend['audit'], binding).inspect()
     need(state['status'] != 'STATE_UNCERTAIN', 'AUDIT_HISTORY_NOT_VERIFIED')
+    kwargs = {}
+    if config['schema_version'] == 3:
+        from . import owner_managed_governance as owner_governance
+        policy = owner_governance.load(PROJECT, config)
+        if policy['schema_version'] == 2:
+            kwargs = {'project': PROJECT, 'policy': policy, 'operation': 'MANUAL_R4'}
     governance = transport.observe_governance(backend['history_ruleset_id'],
-        backend['writer_ruleset_id'], backend['writer_integration_id'])
+        backend['writer_ruleset_id'], backend['writer_integration_id'], **kwargs)
     need(_deployment() == config, 'TRANSITION_DEPLOYMENT_CHANGED')
     readback = {**state, 'scope': 'AUTHENTICATED_GITHUB_READBACK_ONLY'}
     return {'status': 'GITHUB_AUDIT_READBACK_VERIFIED', 'state': readback,
@@ -460,7 +467,9 @@ def run_writer():
         token = os.environ.get('PARENT_AUTHORITY_AUDIT_TOKEN', '')
         read_transport = GitHubAuditTransport(backend['audit'], binding, token)
         read_transport.verify_tree()
-        _writer_governance(read_transport, backend, config=config, project=PROJECT)  # Must pass before APPEND exists.
+        controls = _writer_governance(read_transport, backend, config=config, project=PROJECT)  # Before APPEND exists.
+        if config['schema_version'] == 3 and controls.get('complete_current_ruleset_verification') is False:
+            result['ruleset_observation'] = controls['rules']
         transport = GitHubAuditTransport(backend['audit'], binding, token, write_scope='APPEND')
         transport.verify_tree()
         protocol = audit._IsolatedGitProtocol(transport, backend['audit'], binding)
@@ -486,7 +495,10 @@ def run_writer():
             need(actual == config, 'TRANSITION_DEPLOYMENT_CHANGED')
             _writer_governance(read_transport, backend, config=config, project=PROJECT)
             return observation
-        return _execute_transaction(PROJECT, isolation, config, observed, protocol, _revalidate=revalidate)
+        executed = _execute_transaction(PROJECT, isolation, config, observed, protocol, _revalidate=revalidate)
+        if 'ruleset_observation' in result:
+            executed['ruleset_observation'] = result['ruleset_observation']
+        return executed
     except Exception as error:
         result['reason'] = str(error) if isinstance(error, (transition.TransitionError, audit.AuditError, owner.OwnerApprovalError, ValueError)) and re.fullmatch('[A-Z][A-Z0-9_]{0,100}', str(error)) else 'WRITER_VERIFICATION_FAILED'
     return result

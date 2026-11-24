@@ -238,10 +238,25 @@ class GitHubAuditTransport:
                     == 'NOT_RESERVED_REVIEW_REQUIRED', 'AUDIT_INITIALIZATION_READBACK_FAILED')
         return {'status': 'AUDIT_REF_INITIALIZED', 'authorization': 'NOT_GRANTED', 'ref': result}
 
-    def observe_governance(self, history_id, writer_id, integration_id):
+    def observe_governance(self, history_id, writer_id, integration_id, *,
+                           project=None, policy=None, operation=None):
         """Live GET observations, never proof of independent control-plane trust."""
         audit._need(all(type(n) is int and n > 0 for n in (history_id, writer_id, integration_id))
                     and history_id != writer_id, 'AUDIT_GOVERNANCE_IDENTITIES_REQUIRED')
+        if policy is not None:
+            from scripts import runtime_ruleset_observation as observation
+            audit._need(all(type(policy[k]) is type(self.config[k]) and policy[k] == self.config[k]
+                for k in ('repository', 'repository_id')), 'AUDIT_RUNTIME_POLICY_REPOSITORY_MISMATCH')
+            audit._need(all(type(policy[k]) is int and policy[k] == n for k, n in (
+                ('history_ruleset_id', history_id), ('writer_ruleset_id', writer_id),
+                ('writer_integration_id', integration_id))), 'AUDIT_RUNTIME_POLICY_IDENTITIES_MISMATCH')
+            evidence = observation.load(project, policy, default_branch=policy.get('default_branch', 'ci-upstream-refresh'),
+                governance_sha256=self.config['governance_sha256'], operation=operation)
+            def read(number):
+                status, rule = self.request('GET', self._prefix + '/rulesets/' + str(number))
+                audit._need(status == 200, 'AUDIT_GOVERNANCE_UNAVAILABLE')
+                return rule
+            return observation.observe(evidence, read)
         rulesets = []
         for number in (history_id, writer_id):
             status, rule = self.request('GET', self._prefix + '/rulesets/' + str(number))
