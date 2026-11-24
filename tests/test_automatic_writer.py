@@ -106,6 +106,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("github.event_name == 'schedule'",privileged['if'])
         self.assertIn("vars.AUTOMATIC_LIFECYCLE_ENABLED == 'true'",privileged['if'])
         self.assertIn("vars.AUTOMATIC_LIFECYCLE_ENABLED != 'true'",jobs['publish-continuous-candidate']['if'])
+        for name in ('continuous-candidate','automatic-parent-writer'):
+            checkout=next(s for s in jobs[name]['steps'] if s.get('uses','').startswith('actions/checkout@'))
+            self.assertEqual(checkout['with']['fetch-depth'],0)
+            self.assertIs(checkout['with']['persist-credentials'],False)
 
 
 class OriginTests(unittest.TestCase):

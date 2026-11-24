@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import subprocess
+import io
 import unittest
 from unittest.mock import patch
 
@@ -93,6 +94,53 @@ class ObservationTests(unittest.TestCase):
     def test_drift_after_an_initial_success_is_rejected(self):
         self.observe();self.live[2]['rules']=[]
         with self.assertRaisesRegex(ValueError,'DRIFT'):self.observe()
+
+    def test_rest_update_omission_requires_actual_graphql_false_and_keeps_bypass_unverified(self):
+        live=self.live[2];live['rules']=[{'type':'creation'},{'type':'update'}];live['node_id']='RRS_fixture'
+        del live['bypass_actors'];original=deepcopy(live)
+        with self.assertRaisesRegex(ValueError,'UPDATE_PARAMETER_UNVERIFIED'):self.observe()
+        calls=[]
+        def read(node,number):calls.append((node,number));return False
+        result=observation.observe(self.f.load(),lambda n:self.live[n],update_read=read)
+        self.assertEqual(calls,[('RRS_fixture',2)])
+        self.assertEqual(result['update_parameters_observation'],'LIVE_GRAPHQL_FALSE_REST_PARAMETERS_OMITTED')
+        self.assertEqual(result['bypass_visibility'][1]['bypass_observation'],'NOT_RETURNED_LIVE_BYPASS_UNVERIFIED')
+        self.assertEqual(live,original)
+        for bad in (True,None,0):
+            with self.subTest(bad=bad),self.assertRaisesRegex(ValueError,'PARAMETER_UNSAFE'):
+                observation.observe(self.f.load(),lambda n:self.live[n],update_read=lambda *a:bad)
+        live['rules'][1]['parameters']=None
+        with self.assertRaisesRegex(ValueError,'DRIFT'):
+            observation.observe(self.f.load(),lambda n:self.live[n],update_read=read)
+
+    def test_fixed_graphql_reader_requires_explicit_typed_value_scope_and_complete_result(self):
+        value={'data':{'node':{'databaseId':2,'rules':{'pageInfo':{'hasNextPage':False},'nodes':[
+            {'type':'CREATION','parameters':None},{'type':'UPDATE','parameters':{
+                '__typename':'UpdateParameters','updateAllowsFetchAndMerge':False}}]}}}}
+        class Response(io.BytesIO):
+            def geturl(self):return 'https://api.github.com/graphql'
+        def query(data):
+            with patch.object(observation.urllib.request,'build_opener') as opener:
+                opener.return_value.open.return_value=Response(json.dumps(data).encode())
+                result=observation.live_update('synthetic-token','RRS_fixture',2)
+                request=opener.return_value.open.call_args.args[0]
+                body=json.loads(request.data)
+                self.assertTrue(body['query'].startswith('query '));self.assertNotIn('mutation',body['query'])
+                self.assertEqual(body['variables'],{'id':'RRS_fixture'})
+                self.assertEqual(request.full_url,'https://api.github.com/graphql')
+                return result
+        self.assertIs(query(value),False)
+        for mutation in ('id','missing','errors','page','type'):
+            bad=deepcopy(value)
+            if mutation=='id':bad['data']['node']['databaseId']=3
+            if mutation=='missing':del bad['data']['node']['rules']['nodes'][1]['parameters']['updateAllowsFetchAndMerge']
+            if mutation=='errors':bad['errors']=[{'message':'Synthetic denied'}]
+            if mutation=='page':bad['data']['node']['rules']['pageInfo']['hasNextPage']=True
+            if mutation=='type':bad['data']['node']['rules']['nodes'][1]['parameters']['updateAllowsFetchAndMerge']=0
+            with self.subTest(mutation=mutation),self.assertRaisesRegex(ValueError,'PARAMETER_UNVERIFIED'):query(bad)
+        with patch.object(observation.urllib.request,'build_opener',side_effect=OSError('synthetic')):
+            with self.assertRaisesRegex(ValueError,'PARAMETER_UNVERIFIED'):
+                observation.live_update('synthetic-token','RRS_fixture',2)
 
     def test_effective_default_origin_and_parameters_cannot_contradict_owner_pin(self):
         rows=[{**deepcopy(r),'ruleset_id':3} for r in self.f.evidence['rulesets'][2]['rules']]

@@ -76,7 +76,8 @@ def observe_rules(client,policy,*,project=None):
         from scripts import runtime_ruleset_observation as observation
         evidence=observation.load(project,policy,default_branch='ci-upstream-refresh',
             governance_sha256=policy['governance_sha256'],operation='AUTOMATIC_LIFECYCLE')
-        return observation.observe(evidence,lambda number:client._api('GET',base+'/rulesets/'+str(number)))
+        return observation.observe(evidence,lambda number:client._api('GET',base+'/rulesets/'+str(number)),
+            update_read=lambda node,number:observation.live_update(client.token,node,number))
     rulesets=[]
     for number in (policy['history_ruleset_id'],policy['writer_ruleset_id']):
         r=client._api('GET',base+'/rulesets/'+str(number))

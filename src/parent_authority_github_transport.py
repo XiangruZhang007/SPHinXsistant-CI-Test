@@ -256,7 +256,8 @@ class GitHubAuditTransport:
                 status, rule = self.request('GET', self._prefix + '/rulesets/' + str(number))
                 audit._need(status == 200, 'AUDIT_GOVERNANCE_UNAVAILABLE')
                 return rule
-            return observation.observe(evidence, read)
+            return observation.observe(evidence, read,
+                update_read=lambda node, number: observation.live_update(self._token, node, number))
         rulesets = []
         for number in (history_id, writer_id):
             status, rule = self.request('GET', self._prefix + '/rulesets/' + str(number))

@@ -186,7 +186,8 @@ def verify(env, project, api):
         and x.get('dismiss_stale_reviews_on_push') is True for x in prs), 'TRUSTED_WORKFLOW_BRANCH_PROTECTION_REQUIRED')
     if runtime_evidence is not None:
         runtime_observation = observation.observe(runtime_evidence,
-            lambda number: api(base + '/rulesets/' + str(number)))
+            lambda number: api(base + '/rulesets/' + str(number)),
+            update_read=lambda node, number: observation.live_update(env.get('GH_TOKEN', ''), node, number))
         observation.effective_default(runtime_evidence, rules)
     # Legacy policies retain the complete-live bypass requirement unchanged.
     for kind in (() if runtime_evidence is not None else ('deletion', 'non_fast_forward', 'pull_request')):

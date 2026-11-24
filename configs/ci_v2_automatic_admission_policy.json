@@ -1,0 +1,26 @@
+{
+  "benchmark_sha256": "bac0b31b74410eaff00246e628187ee07c4aaefb8747ad076f090393b71d1ab7",
+  "build_fingerprint": "7f66fe80e92d7263d5147d4fea551855184af75829f5b62993eb162acceb0cd8",
+  "expires_at": "2026-12-09T00:00:00Z",
+  "kind": "AUTOMATIC_QUALITY_ADMISSION_V1",
+  "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
+  "repository_id": 1455203884,
+  "required_modes": [
+    "combined",
+    "documentation_only"
+  ],
+  "required_rows": 176,
+  "requirements": {
+    "accepted_flag": true,
+    "explicit_restrictions": "NON_OVERRIDABLE",
+    "new_losses": 0,
+    "p8": "ELIGIBLE",
+    "parity": "PARITY_PASS",
+    "q1": "QUALIFIED_FOR_VERSION_PAIR",
+    "recorded_quality": "QUALITY_ACCEPTED",
+    "strict_failures": 0,
+    "synthetic": "DENIED"
+  },
+  "schema_version": 1,
+  "valid_from": "2026-11-24T09:59:27Z"
+}

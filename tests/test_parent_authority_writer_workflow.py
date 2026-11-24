@@ -92,7 +92,7 @@ class WriterWorkflowTests(unittest.TestCase):
         for node in ast.walk(helper):
             if isinstance(node,ast.Import):helper_roots.update(x.name.split('.')[0] for x in node.names)
             if isinstance(node,ast.ImportFrom):helper_roots.add(node.module.split('.')[0])
-        self.assertTrue(helper_roots<={'datetime','hashlib','json','pathlib','re','os','subprocess'})
+        self.assertTrue(helper_roots<={'datetime','hashlib','json','pathlib','re','os','subprocess','urllib'})
         self.assertNotIn('PRIVATE_KEY',(P/'scripts/parent_authority_writer_gate.py').read_text())
         for prefix in ('/.github/','/scripts/','/src/','/configs/'):
             self.assertIn(prefix,(P/'.github/CODEOWNERS').read_text())
