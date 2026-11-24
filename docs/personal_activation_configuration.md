@@ -85,8 +85,8 @@ genesis. The new explicit backend below omits `genesis_sha` before dispatch:
     "schema_version": 3,
     "repository": "XiangruZhang007/SPHinXsistant-CI-Test",
     "repository_id": 1455203884,
-    "ref": "refs/heads/ci-v2-authority-audit/ed20b392594046db84a6f2306053440e",
-    "tree_sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "ref": "refs/heads/ci-v2-authority-audit/ae73565483a2f87d3c8f5b16f139a02c",
+    "tree_sha": "68942ab6c14253e7123623afa7b025ebcedabcf2",
     "governance_sha256": "da7ec16e65c9cfdcde34af6ab244d35df3ba313dc011abed9a81623ae67fe344"
   },
   "history_ruleset_id": 27770139,
@@ -118,6 +118,23 @@ verification did not measure GraphQL; genuine Hosted capability is still
 unmeasured. This integrated read-only prerequisite will fail closed before any
 Git object/ref write if either required token cannot make the observation.
 
+The audit tree has exactly one fixed `.ci-v2-audit` file, mode `100644`, with
+zero bytes. Its blob SHA is `e69de29bb2d1d6434b8b29ae775ad8c2e48c5391`.
+Creation uses this exact REST body, with no base tree or inherited contents:
+
+```json
+{"tree":[{"path":".ci-v2-audit","mode":"100644","type":"blob","content":""}]}
+```
+
+Tree readback rejects extra entries, changed paths, executable/symlink modes,
+wrong blob/tree SHA, nonzero or malformed size and truncation. A separate GET of
+only the fixed empty blob verifies base64 encoding and zero-byte content. No
+blob-write endpoint, Git push transport, permission or credential is added.
+Existing externally pinned empty-tree deployments retain their exact pins and
+layout; they are never silently converted or used as a fallback. The automatic
+Writer uses the same fixed placeholder tree and recomputes its genesis hash.
+The derived Registry's existing two-member tree remains unchanged.
+
 The first fresh INITIALIZE instance calls `create_genesis`, verifies the exact
 predicted SHA and reads the object back. Context/governance and absence are
 checked again, then a second fresh INITIALIZE instance calls `initialize_ref`.
@@ -131,7 +148,7 @@ evidence for Owner read-only reconciliation.
 Implementation approval does not authorize this bootstrap or R4 execution. The
 review packet must be rebound to the actual protected merge, then explicitly
 approved together with the exact three R4 Variables and Owner dispatch inputs.
-That execution scope would permit only empty-tree/root/ref initialization on the
+That execution scope would permit only fixed-zero-byte-tree/root/ref initialization on the
 ref above and the existing three audit APPEND events plus isolated APPLY. It
 would not permit an authoritative Registry commit, derived initialization,
 Release publication, lifecycle activation, ref deletion/reset or production work.
@@ -139,6 +156,44 @@ The actual run-bound genesis SHA is recorded after dispatch by preparation and
 must match the Writer's independent derivation and remote readback. Protected
 Registry integration remains a separately reviewed result after genuine R4
 completion. No authoritative Registry integration is inferred from isolated APPLY.
+
+### Historical failure and correction review
+
+Genuine run [45394157984](https://github.com/XiangruZhang007/SPHinXsistant-CI-Test/actions/runs/45394157984)
+passed Owner preparation, manual Environment approval, live governance/GraphQL
+with the read-only GITHUB_TOKEN and actual App token, and installation scope.
+Those prerequisites are completed evidence and are not repeated. Token revocation
+was confirmed. The result remains `STATE_UNCERTAIN / AUDIT_TREE_CREATION_FAILED`;
+its sanitized result did not retain the actual tree POST HTTP status/body.
+Neither external reports nor subsequent 404 readbacks establish that historical
+HTTP status or a complete zero-effect rollback. The run must not be rerun and its
+execution authorization is not reused.
+
+GitHub's [Trees API](https://docs.github.com/en/rest/git/trees?apiVersion=2022-11-28)
+documents inline `content` entries without a base tree. The
+[empty-tree GET report](https://github.com/orgs/community/discussions/131150)
+and user-supplied
+[orphan-branch report](https://stackoverflow.com/questions/18565425/how-do-i-create-an-orphan-branch-from-the-github-api)
+describe empty-tree interoperability problems; they motivate removing that
+dependency, without proving this run's exact failure response. No diagnostic
+POST is performed to reproduce it. Local native Git independently verifies the
+fixed blob, tree and run-bound genesis hashes. These remain synthetic/local tests,
+not genuine Hosted acceptance of the correction.
+
+The new fixed ref in this proposal is a fresh transaction subject, not an
+automatic retry. A new protected merge, Request/Proposal/Subject, raw deployment
+pin, exact Variable values and single new Owner dispatch must receive concrete
+execution approval. Existing installed Variables still contain the historical
+approved deployment. Only the deployment JSON and its SHA need PATCH; the already
+true preparation flag remains unchanged. This correction does not modify them. The policy interval
+is unchanged and is never silently extended.
+
+Future REST failures retain at most eight sanitized diagnostics: fixed operation
+type, method, numeric HTTP status (null for unknown), request index, scope and a
+closed error classification. Error-body parsing is bounded to 4096 bytes; bodies,
+remote messages, headers, signed URLs and credentials are never emitted. HTTP
+201 with an incorrect object or readback still fails. Diagnostics do not alter
+one-shot state, no-retry behavior, authorization or uncertainty handling.
 
 Derived Registry content will be the exact protected R4 result plus
 `DERIVED_PARENT_LINEAGE_V1` with an empty entries list, using the existing

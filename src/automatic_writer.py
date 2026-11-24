@@ -7,7 +7,7 @@ repository-wide. This is explicitly Owner-managed, not independent governance.
 from copy import deepcopy
 import hashlib,os
 from . import parent_authority_git_audit as audit
-from .parent_authority_github_transport import GitHubAuditTransport,EMPTY_TREE
+from .parent_authority_github_transport import GitHubAuditTransport,AUDIT_TREE
 from . import genuine_continuous_execution as genuine,continuous_completion as completion
 from .corpus_snapshot import canonical,digest
 from .automatic_lifecycle_policy import need
@@ -117,12 +117,12 @@ def transaction(policy,config,view,key,entry,release,observed):
         'policy_decision_sha256':digest(decision),'decision':decision,'baseline_id':entry['reference']['node_id'],
         'reference_sha256':entry['expected_reference_sha256'],'notices_sha256':release['assets']['notices.zip']['sha256']}
     cfg={'schema_version':2,'repository':policy['repository'],'repository_id':policy['repository_id'],
-        'ref':'refs/heads/ci-v2-authority-audit/'+tx,'tree_sha':EMPTY_TREE,
+        'ref':'refs/heads/ci-v2-authority-audit/'+tx,'tree_sha':AUDIT_TREE,
         'governance_sha256':policy['governance_sha256'],'genesis_sha':'0'*40}
     person={'name':'CI V2 Policy Writer','email':'ci-v2-policy-writer@users.noreply.github.com',
             'date':'2000-01-01T00:00:00Z'}
     # Git's fixed author/committer are object metadata, not authorization claims.
-    raw=('tree '+EMPTY_TREE+'\nauthor '+person['name']+' <'+person['email']+'> 946684800 +0000\ncommitter '
+    raw=('tree '+AUDIT_TREE+'\nauthor '+person['name']+' <'+person['email']+'> 946684800 +0000\ncommitter '
          +person['name']+' <'+person['email']+'> 946684800 +0000\n\n'+audit._message(audit._genesis(cfg,binding))).encode()
     cfg['genesis_sha']=hashlib.sha1(b'commit '+str(len(raw)).encode()+b'\0'+raw).hexdigest()
     audit._IsolatedGitProtocol(None,cfg,binding)

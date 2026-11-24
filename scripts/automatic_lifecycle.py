@@ -34,7 +34,10 @@ def main(argv=None):
     except Exception as error:
         reason=str(error)
         if not re.fullmatch('[A-Z][A-Z0-9_]{0,99}',reason):reason='AUTOMATIC_LIFECYCLE_FAILED'
-        print(json.dumps({'status':'BLOCKED','reason':reason,'retry':False}))
+        result={'status':'BLOCKED','reason':reason,'retry':False}
+        if isinstance(error,lifecycle.audit.AuditError) and getattr(error,'api_diagnostics',None):
+            result['api_diagnostics']=error.api_diagnostics
+        print(json.dumps(result))
         return 1
 
 if __name__=='__main__':raise SystemExit(main())
