@@ -16,6 +16,7 @@ FIELDS={'schema_version','kind','enabled','repository','repository_id','root_rev
 FILES=('src/automatic_lifecycle_policy.py','src/automatic_candidate.py','src/automatic_lifecycle.py',
     'scripts/runtime_ruleset_observation.py',
     'scripts/parent_authority_writer_gate.py',
+    'scripts/parent_authority_writer_bootstrap.py',
     'src/derived_parent_registry.py','src/automatic_release.py','src/automatic_writer.py',
     'src/gradio_deployment_adapter.py','src/update_eligibility_gate.py','src/candidate_promotion_policy.py','scripts/automatic_lifecycle.py',
     '.github/workflows/upstream_refresh.yml','src/parent_authority_git_audit.py',

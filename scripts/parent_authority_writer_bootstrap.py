@@ -9,11 +9,16 @@ import json
 import re
 
 KIND = 'GITHUB_GIT_AUDIT_OWNER_RUN_BOOTSTRAP_V1'
-REF = 'refs/heads/ci-v2-authority-audit/ed20b392594046db84a6f2306053440e'
+# A new proposed transaction, never a replay of uncertain run 45394157984.
+REF = 'refs/heads/ci-v2-authority-audit/ae73565483a2f87d3c8f5b16f139a02c'
 REPOSITORY = 'XiangruZhang007/SPHinXsistant-CI-Test'
 REPOSITORY_ID = 1455203884
 OWNER_ID = 239840087
-TREE = hashlib.sha1(b'tree 0\0').hexdigest()
+EMPTY_TREE = hashlib.sha1(b'tree 0\0').hexdigest()
+PLACEHOLDER = '.ci-v2-audit'
+EMPTY_BLOB = hashlib.sha1(b'blob 0\0').hexdigest()
+_TREE_BYTES = b'100644 ' + PLACEHOLDER.encode() + b'\0' + bytes.fromhex(EMPTY_BLOB)
+TREE = hashlib.sha1(b'tree ' + str(len(_TREE_BYTES)).encode() + b'\0' + _TREE_BYTES).hexdigest()
 PERSON = {'name': 'CI V2 R4 Writer',
           'email': 'ci-v2-r4-writer@users.noreply.github.com', 'date': '2000-01-01T00:00:00Z'}
 AUDIT_FIELDS = {'schema_version', 'repository', 'repository_id', 'ref',
@@ -28,6 +33,30 @@ def need(ok, reason):
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
         ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+
+
+def tree_request(pin):
+    """Two exact pinned layouts; no fallback or base-tree inheritance."""
+    need(pin in (EMPTY_TREE, TREE), 'AUDIT_CONTENT_FREE_TREE_REQUIRED')
+    return {'tree': [] if pin == EMPTY_TREE else [
+        {'path': PLACEHOLDER, 'mode': '100644', 'type': 'blob', 'content': ''}]}
+
+
+def tree_matches(pin, value):
+    if not (pin in (EMPTY_TREE, TREE) and isinstance(value, dict)
+            and value.get('sha') == pin and value.get('truncated') is False):
+        return False
+    rows = value.get('tree')
+    if pin == EMPTY_TREE:
+        return rows == []
+    if not (isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict)):
+        return False
+    row = rows[0]
+    return (set(row) in ({'path', 'mode', 'type', 'sha', 'size'},
+                        {'path', 'mode', 'type', 'sha', 'size', 'url'})
+            and row['path'] == PLACEHOLDER and row['mode'] == '100644'
+            and row['type'] == 'blob' and row['sha'] == EMPTY_BLOB
+            and type(row['size']) is int and row['size'] == 0)
 
 
 def selected(config):

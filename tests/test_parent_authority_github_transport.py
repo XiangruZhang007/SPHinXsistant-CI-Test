@@ -39,7 +39,12 @@ class Server(audit_tests.GitModel):
         body = json.loads(request.data) if request.data else None
         suffix = endpoint.removeprefix('repos/' + self.config['repository'])
         if request.method == 'GET' and suffix.startswith('/git/trees/'):
-            status, value = 200, {'sha': self.config['tree_sha'], 'tree': [], 'truncated': False}
+            rows = [] if self.config['tree_sha'] == rest.EMPTY_TREE else [
+                {'path': rest.layout.PLACEHOLDER, 'mode': '100644', 'type': 'blob',
+                 'sha': rest.layout.EMPTY_BLOB, 'size': 0}]
+            status, value = 200, {'sha': self.config['tree_sha'], 'tree': rows, 'truncated': False}
+        elif request.method == 'GET' and suffix == '/git/blobs/' + rest.layout.EMPTY_BLOB:
+            status, value = 200, {'sha': rest.layout.EMPTY_BLOB, 'encoding': 'base64', 'size': 0, 'content': ''}
         elif request.method == 'POST' and suffix == '/git/trees':
             status, value = 201, {'sha': self.config['tree_sha']}
         elif request.method == 'GET' and suffix.startswith('/rulesets/'):

@@ -473,6 +473,16 @@ def run_writer():
     from . import baseline_registration_transaction as tx
     result = {'status': 'BLOCKED', 'authorization': 'NOT_GRANTED', 'registry_committed': False,
         'authoritative_registry_applied': False, 'production_promotion': 'NOT_AUTHORIZED'}
+    transports = []
+    def connected(*args, **kwargs):
+        transport = GitHubAuditTransport(*args, **kwargs)
+        transports.append(transport)
+        return transport
+    def diagnostics():
+        rows = [row for transport in transports for row in transport.http_diagnostics()]
+        # Preserve failures even when a different transport has recent reads.
+        rows.sort(key=lambda row: row['outcome'] != 'HTTP_RESPONSE')
+        return rows[-8:]
     try:
         reviewed, observed = _writer_context(PROJECT)
         initializing = bootstrap.selected(reviewed)
@@ -486,7 +496,7 @@ def run_writer():
         if initializing:
             need(binding == predicted_binding, 'BOOTSTRAP_BINDING_MISMATCH')
         token = os.environ.get('PARENT_AUTHORITY_AUDIT_TOKEN', '')
-        read_transport = GitHubAuditTransport(backend['audit'], binding, token)
+        read_transport = connected(backend['audit'], binding, token)
         if not initializing:
             read_transport.verify_tree()
         controls = _writer_governance(read_transport, backend, config=config, project=PROJECT)  # Before APPEND exists.
@@ -525,19 +535,19 @@ def run_writer():
             revalidate()
             read_transport.verify_absent_ref()
             result['bootstrap'].update(phase='CREATE_GENESIS', mutation_attempted=True)
-            creator = GitHubAuditTransport(backend['audit'], binding, token, write_scope='INITIALIZE')
+            creator = connected(backend['audit'], binding, token, write_scope='INITIALIZE')
             creator.create_genesis(deepcopy(bootstrap.PERSON))
             revalidate()
             read_transport.verify_absent_ref()
             result['bootstrap']['phase'] = 'INITIALIZE_REF'
             # Each primitive is one-shot; never reuse creator or reset its state.
-            initializer = GitHubAuditTransport(backend['audit'], binding, token, write_scope='INITIALIZE')
+            initializer = connected(backend['audit'], binding, token, write_scope='INITIALIZE')
             initializer.initialize_ref()
             read_transport.verify_tree()
             need(audit._IsolatedGitProtocol(read_transport, backend['audit'], binding).inspect()['status']
                  == 'NOT_RESERVED_REVIEW_REQUIRED', 'BOOTSTRAP_INITIAL_STATE_UNVERIFIED')
             result['bootstrap']['phase'] = 'VERIFIED'
-        transport = GitHubAuditTransport(backend['audit'], binding, token, write_scope='APPEND')
+        transport = connected(backend['audit'], binding, token, write_scope='APPEND')
         transport.verify_tree()
         protocol = audit._IsolatedGitProtocol(transport, backend['audit'], binding)
         executed = _execute_transaction(PROJECT, isolation, config, observed, protocol, _revalidate=revalidate)
@@ -545,10 +555,14 @@ def run_writer():
             executed['bootstrap'] = result['bootstrap']
         if 'ruleset_observation' in result:
             executed['ruleset_observation'] = result['ruleset_observation']
+        if executed.get('status') != 'COMPLETED' and diagnostics():
+            executed['api_diagnostics'] = diagnostics()
         return executed
     except Exception as error:
         if result.get('bootstrap', {}).get('mutation_attempted'):
             result.update(status='STATE_UNCERTAIN', automatic_retry=False,
                 reconciliation='OWNER_READ_ONLY_RECONCILIATION_REQUIRED')
         result['reason'] = str(error) if isinstance(error, (transition.TransitionError, audit.AuditError, owner.OwnerApprovalError, ValueError)) and re.fullmatch('[A-Z][A-Z0-9_]{0,100}', str(error)) else 'WRITER_VERIFICATION_FAILED'
+        if diagnostics():
+            result['api_diagnostics'] = diagnostics()
     return result

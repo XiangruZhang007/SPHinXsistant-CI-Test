@@ -47,6 +47,15 @@ class EmptyServer(http.Server):
             # A premature pre-existing-genesis assumption fails the composition.
             raise AssertionError('TREE_DOES_NOT_EXIST_BEFORE_FIRST_POST')
         if req.method == 'POST' and suffix == '/git/trees':
+            payload = json.loads(req.data)
+            assert payload == bootstrap.tree_request(bootstrap.TREE)
+            # A server with no empty-tree support must still pass this path.
+            assert len(payload['tree']) == 1 and payload['tree'][0]['content'] == ''
+            row = payload['tree'][0]
+            blob = subprocess.check_output(['git', 'hash-object', '--stdin'], input=row['content'].encode()).decode().strip()
+            tree_bytes = row['mode'].encode() + b' ' + row['path'].encode() + b'\0' + bytes.fromhex(blob)
+            native_tree = subprocess.check_output(['git', 'hash-object', '-t', 'tree', '--stdin'], input=tree_bytes).decode().strip()
+            assert native_tree == self.config['tree_sha']
             self.tree_exists = True
         if req.method == 'POST' and suffix == '/git/commits':
             body = json.loads(req.data)
@@ -328,6 +337,36 @@ class BootstrapIntegrationTests(unittest.TestCase):
             os.environ['OWNER_PREPARATION_RECEIPT'] = json.dumps(receipt)
             with self.assertRaisesRegex(ValueError, 'BOOTSTRAP_PREPARATION_MISMATCH'):
                 gate.verify(os.environ, self.root, self.g.api)
+
+    def test_historical_uncertain_transaction_is_not_reused(self):
+        self.config['request']['transaction_id'] = 'ed20b392594046db84a6f2306053440e'
+        self.config['transaction_backend']['audit']['ref'] = 'refs/heads/ci-v2-authority-audit/ed20b392594046db84a6f2306053440e'
+        self.repin(); self.raw_deployment()
+        with self.boundaries(), self.assertRaisesRegex(ValueError, 'SCOPE_MISMATCH'):
+            preparation.prepare()
+        self.assertIsNone(self.server)
+
+    def test_tree_http_failure_surfaces_sanitized_status_and_never_enters_append(self):
+        first_run = EmptyServer.first_run
+        secret = 'SYNTHETIC_CREDENTIAL_MUST_NOT_LEAK'
+        def rejected(server, req):
+            if req.method == 'POST' and req.full_url.endswith('/git/trees'):
+                import io, urllib.error
+                body = json.dumps({'message': 'Tree does not contain any files',
+                    'token': secret, 'documentation_url': 'https://invalid/?token='+secret}).encode()
+                raise urllib.error.HTTPError(req.full_url, 422, secret, {'Authorization': secret}, io.BytesIO(body))
+            return first_run(server, req)
+        with self.boundaries(), patch.object(EmptyServer, 'first_run', rejected):
+            self.prepare_and_gate(); result = hosted.run_writer()
+        self.assertEqual(result['status'], 'STATE_UNCERTAIN', result)
+        self.assertEqual(result['reason'], 'AUDIT_TREE_CREATION_FAILED')
+        failures = [r for r in result['api_diagnostics'] if r['http_status'] == 422]
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]['api_error_code'], 'TREE_HAS_NO_FILES')
+        self.assertLessEqual(len(result['api_diagnostics']), 8)
+        self.assertNotIn(secret, json.dumps(result))
+        self.assertTrue(self.server.absent)
+        self.assertFalse(any(t._scope == 'APPEND' for t in self.instances))
 
 
 if __name__ == '__main__':

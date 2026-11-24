@@ -15,11 +15,53 @@ import urllib.request
 from . import parent_authority_git_audit as audit
 from .corpus_snapshot import canonical, digest
 from .trusted_snapshot import repository_identity
+from scripts import parent_authority_writer_bootstrap as layout
 
 API = 'https://api.github.com/'
 MAX_RESPONSE = 1024 * 1024
 MAX_REQUESTS = 128
 EMPTY_TREE = hashlib.sha1(b'tree 0\0').hexdigest()
+AUDIT_TREE = layout.TREE
+MAX_DIAGNOSTICS = 8
+MAX_ERROR_BODY = 4096
+
+
+def _error_code(raw):
+    """Closed classifications only: never return remote strings or body excerpts."""
+    if len(raw) > MAX_ERROR_BODY:
+        return 'ERROR_BODY_TOO_LARGE'
+    try:
+        def unique(pairs):
+            value = {}
+            for k, v in pairs:
+                if k in value: raise ValueError()
+                value[k] = v
+            return value
+        value = json.loads(raw, object_pairs_hook=unique,
+            parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+        message = value.get('message') if isinstance(value, dict) else None
+        return {'Not Found': 'NOT_FOUND', 'Bad credentials': 'BAD_CREDENTIALS',
+            'Resource not accessible by integration': 'INTEGRATION_ACCESS_DENIED',
+            'Validation Failed': 'VALIDATION_FAILED',
+            'Tree does not contain any files': 'TREE_HAS_NO_FILES',
+            'Tree does not exist': 'TREE_NOT_FOUND'}.get(message, 'UNCLASSIFIED_API_ERROR') if isinstance(message, str) else 'UNCLASSIFIED_API_ERROR'
+    except Exception:
+        return 'INVALID_ERROR_BODY'
+
+
+def _record_http(client, method, endpoint, status, outcome, api_error=None):
+    # Also used by the existing derived-state client's shared _exchange call.
+    operation = 'REPOSITORY_OR_RULE_READ'
+    for name in ('trees', 'blobs', 'commits', 'refs', 'ref', 'matching-refs'):
+        if '/git/' + name in endpoint:
+            operation = 'GIT_' + name.upper().replace('-', '_'); break
+    scope = getattr(client, '_scope', None)
+    item = {'method': method, 'operation': operation,
+        'http_status': status if type(status) is int and 100 <= status <= 599 else None,
+        'outcome': outcome, 'request_index': client._requests,
+        'scope': scope if scope in ('INITIALIZE', 'APPEND') else 'READ_OR_DERIVED'}
+    if api_error is not None: item['api_error_code'] = api_error
+    client._http_diagnostics = (getattr(client, '_http_diagnostics', []) + [item])[-MAX_DIAGNOSTICS:]
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -30,7 +72,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 class GitHubAuditTransport:
     """Pinned endpoint allowlist; `write_scope` never supplies research authority.
 
-    None is read-only; INITIALIZE permits only empty-tree/root/ref provisioning;
+    None is read-only; INITIALIZE permits only pinned audit-tree/root/ref provisioning;
     APPEND permits only canonical single-parent protocol commits + force=false.
     Callers must obtain separate operation authorization before choosing a scope.
     Scope selection does not replace the Hosted entry's authorization checks.
@@ -38,7 +80,7 @@ class GitHubAuditTransport:
     def __init__(self, config, binding, token, *, write_scope=None):
         # Reuse the actual protocol's complete config/binding shape validation.
         audit._IsolatedGitProtocol(self, config, binding)
-        audit._need(config['tree_sha'] == EMPTY_TREE, 'AUDIT_CONTENT_FREE_TREE_REQUIRED')
+        audit._need(config['tree_sha'] in (EMPTY_TREE, AUDIT_TREE), 'AUDIT_CONTENT_FREE_TREE_REQUIRED')
         audit._need(isinstance(token, str) and 0 < len(token) <= 4096
                     and not any(ch.isspace() for ch in token), 'AUDIT_TOKEN_REQUIRED')
         audit._need(write_scope in (None, 'INITIALIZE', 'APPEND'), 'INVALID_AUDIT_WRITE_SCOPE')
@@ -55,6 +97,15 @@ class GitHubAuditTransport:
         self._mutation_keys = set()
         self._writes_closed = False
 
+    def http_diagnostics(self):
+        return deepcopy(getattr(self, '_http_diagnostics', []))
+
+    def _require(self, condition, reason):
+        if not condition:
+            error = audit.AuditError(reason)
+            error.api_diagnostics = self.http_diagnostics()
+            raise error
+
     def _exchange(self, method, endpoint, body):
         """Single bounded authenticated request. No raw remote error is exposed."""
         self._requests += 1
@@ -65,10 +116,11 @@ class GitHubAuditTransport:
             'Authorization': 'Bearer ' + self._token,
             'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json',
             'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'SPHinXsistant-audit-v1'})
+        status = None
         try:
             with self._opener.open(req, timeout=15) as response:
-                audit._need(response.geturl() == API + endpoint, 'AUDIT_REDIRECT_REJECTED')
                 status = response.status
+                audit._need(response.geturl() == API + endpoint, 'AUDIT_REDIRECT_REJECTED')
                 data = response.read(MAX_RESPONSE + 1)
                 audit._need(len(data) <= MAX_RESPONSE, 'OVERSIZED_AUDIT_RESPONSE')
                 # Strict duplicate-key/non-finite JSON handling without requiring
@@ -82,14 +134,20 @@ class GitHubAuditTransport:
                 value = json.loads(data, object_pairs_hook=unique,
                     parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
                 audit._need(isinstance(value, (dict, list)), 'INVALID_AUDIT_JSON')
+                _record_http(self, method, endpoint, status, 'HTTP_RESPONSE')
                 return status, value
         except urllib.error.HTTPError as error:
-            # Never retain API bodies, credentials, signed URLs or arbitrary text.
             status = error.code
-            error.close()
+            try: code = _error_code(error.read(MAX_ERROR_BODY + 1))
+            except Exception: code = 'ERROR_BODY_UNAVAILABLE'
+            finally: error.close()
+            _record_http(self, method, endpoint, status, 'HTTP_ERROR', code)
             return status, {}
         except Exception:
-            raise audit.AuditError('AUDIT_API_OUTCOME_UNCERTAIN') from None
+            _record_http(self, method, endpoint, status, 'TRANSPORT_OR_RESPONSE_UNCERTAIN')
+            error = audit.AuditError('AUDIT_API_OUTCOME_UNCERTAIN')
+            error.api_diagnostics = deepcopy(self._http_diagnostics)
+            raise error from None
 
     def request(self, method, endpoint, body=None):
         """The existing protocol transport interface; no generic API proxy."""
@@ -100,7 +158,7 @@ class GitHubAuditTransport:
         ref = c['ref'][5:]
         if method == 'GET':
             allowed = suffix in ('', '/git/ref/' + ref, '/git/matching-refs/' + ref,
-                                 '/rules/branches/' + ref[6:]) or bool(re.fullmatch(
+                                 '/rules/branches/' + ref[6:], '/git/blobs/' + layout.EMPTY_BLOB) or bool(re.fullmatch(
                 r'/git/(?:commits|trees)/[0-9a-f]{40}|/rulesets/[1-9][0-9]*', suffix))
             audit._need(allowed and body is None, 'AUDIT_ENDPOINT_DENIED')
         else:
@@ -108,7 +166,7 @@ class GitHubAuditTransport:
                         and isinstance(body, dict), 'AUDIT_WRITES_NOT_AUTHORIZED')
             if suffix == '/git/trees':
                 audit._need(method == 'POST' and self._scope == 'INITIALIZE'
-                    and body == {'tree': []} and c['tree_sha'] == EMPTY_TREE,
+                    and body == layout.tree_request(c['tree_sha']),
                     'AUDIT_TREE_CREATION_DENIED')
             elif suffix == '/git/commits':
                 audit._need(method == 'POST' and body.get('tree') == c['tree_sha'],
@@ -183,10 +241,14 @@ class GitHubAuditTransport:
 
     def verify_tree(self):
         status, tree = self.request('GET', self._prefix + '/git/trees/' + self.config['tree_sha'])
-        audit._need(status == 200 and isinstance(tree, dict)
-            and tree.get('sha') == self.config['tree_sha'] == EMPTY_TREE
-            and tree.get('tree') == [] and tree.get('truncated') is False,
+        self._require(status == 200 and layout.tree_matches(self.config['tree_sha'], tree),
             'AUDIT_CONTENT_FREE_TREE_REQUIRED')
+        if self.config['tree_sha'] == AUDIT_TREE:
+            status, blob = self.request('GET', self._prefix + '/git/blobs/' + layout.EMPTY_BLOB)
+            self._require(status == 200 and isinstance(blob, dict)
+                and blob.get('sha') == layout.EMPTY_BLOB and blob.get('encoding') == 'base64'
+                and type(blob.get('size')) is int and blob['size'] == 0
+                and blob.get('content') in ('', '\n'), 'AUDIT_ZERO_BYTE_BLOB_REQUIRED')
         return tree
 
     def create_genesis(self, reviewed_git_identity):
@@ -194,15 +256,15 @@ class GitHubAuditTransport:
         audit._need(self._scope == 'INITIALIZE' and not self._initialization_attempted,
                     'AUDIT_INITIALIZATION_NOT_AUTHORIZED')
         self._initialization_attempted = True
-        status, tree = self.request('POST', self._prefix + '/git/trees', {'tree': []})
-        audit._need(status == 201 and tree.get('sha') == self.config['tree_sha'] == EMPTY_TREE,
+        status, tree = self.request('POST', self._prefix + '/git/trees', layout.tree_request(self.config['tree_sha']))
+        self._require(status == 201 and tree.get('sha') == self.config['tree_sha'],
                     'AUDIT_TREE_CREATION_FAILED')
         self.verify_tree()
         status, commit = self.request('POST', self._prefix + '/git/commits', {
             'message': audit._message(audit._genesis(self.config, self.binding)),
             'tree': self.config['tree_sha'], 'parents': [],
             'author': reviewed_git_identity, 'committer': reviewed_git_identity})
-        audit._need(status == 201 and commit.get('sha') == self.config['genesis_sha'],
+        self._require(status == 201 and commit.get('sha') == self.config['genesis_sha'],
                     'AUDIT_GENESIS_PIN_MISMATCH')
         self._verify_genesis()
         return {'status': 'GENESIS_OBJECT_VERIFIED', 'authorization': 'NOT_GRANTED'}
@@ -211,7 +273,7 @@ class GitHubAuditTransport:
         self.verify_tree()
         audit._IsolatedGitProtocol(self, self.config, self.binding)._commit(self.config['genesis_sha'])
         status, obj = self.request('GET', self._prefix + '/git/commits/' + self.config['genesis_sha'])
-        audit._need(status == 200 and obj.get('parents') == []
+        self._require(status == 200 and obj.get('parents') == []
                     and audit._parse(obj.get('message')) == audit._genesis(self.config, self.binding),
                     'AUDIT_GENESIS_MISMATCH')
 
@@ -235,8 +297,8 @@ class GitHubAuditTransport:
         self._ref_creation_ready = True
         status, result = self.request('POST', self._prefix + '/git/refs', {
             'ref': self.config['ref'], 'sha': self.config['genesis_sha']})
-        audit._need(status == 201, 'AUDIT_REF_CREATION_UNCERTAIN')
-        audit._need(result.get('ref') == self.config['ref']
+        self._require(status == 201, 'AUDIT_REF_CREATION_UNCERTAIN')
+        self._require(result.get('ref') == self.config['ref']
             and result.get('object', {}).get('sha') == self.config['genesis_sha']
             and result['object'].get('type') == 'commit', 'AUDIT_REF_CREATION_READBACK_MISMATCH')
         audit._need(audit._IsolatedGitProtocol(self, self.config, self.binding).inspect()['status']
