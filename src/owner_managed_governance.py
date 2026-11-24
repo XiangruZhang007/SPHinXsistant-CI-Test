@@ -1,6 +1,7 @@
 """Versioned Owner-managed successor; never certifies historical independence."""
 from datetime import datetime, timezone
 from .corpus_snapshot import digest
+from scripts import runtime_ruleset_observation as observation
 
 MODEL = 'OWNER_MANAGED_GOVERNANCE_V1'
 RISK = 'OWNER_CAN_CHANGE_RULES_AND_ROLL_BACK_BETWEEN_OBSERVATIONS'
@@ -17,6 +18,11 @@ def load(project, config):
          and value['trust_model'] == MODEL, 'INVALID_OWNER_MANAGED_GOVERNANCE')
     _, policy = transition._read(project, value['policy_path'], value['policy_sha256'])
     backend = config['transaction_backend']
+    if policy.get('schema_version') == 2:
+        policy = observation.manual_policy(project, config)
+        observation.load(project, policy, default_branch=r['default_branch'],
+            governance_sha256=backend['audit']['governance_sha256'], operation='MANUAL_R4')
+        return policy
     need(set(policy) == FIELDS and type(policy['schema_version']) is int
          and policy['schema_version'] == 1 and policy['trust_model'] == MODEL
          and policy['risk_acceptance'] == RISK, 'OWNER_MANAGED_RISK_ACKNOWLEDGEMENT_REQUIRED')
@@ -49,12 +55,17 @@ def observe(project, config, transport):
     need(policy['owner_id'] == gate.OWNER_ID
          and policy['writer_integration_id'] == gate.APP_ID,
          'OWNER_MANAGED_WRITER_IDENTITY_MISMATCH')
+    revised = policy['schema_version'] == 2
     observed = transport.observe_governance(policy['history_ruleset_id'],
-        policy['writer_ruleset_id'], policy['writer_integration_id'])
-    need(observed['status'] == 'PINNED_RULESETS_OBSERVED', 'OWNER_MANAGED_RULES_NOT_OBSERVED')
+        policy['writer_ruleset_id'], policy['writer_integration_id'],
+        **({'project': project, 'policy': policy, 'operation': 'MANUAL_R4'} if revised else {}))
+    need(observed['status'] == ('OWNER_PINNED_PUBLIC_PROJECTION_MATCHES' if revised
+         else 'PINNED_RULESETS_OBSERVED'), 'OWNER_MANAGED_RULES_NOT_OBSERVED')
     return {'status': 'OWNER_MANAGED_CONTROLS_OBSERVED', 'trust_model': MODEL,
         'policy_sha256': config['governance']['policy_sha256'],
         'policy_canonical_sha256': digest(policy), 'rules': observed,
         'credential_scope': token, 'independent_governance': 'NOT_REQUIRED_BY_THIS_CONTRACT',
         'administrator_rollback_prevention': 'NOT_GUARANTEED',
-        'risk_acceptance': RISK, 'authorization': 'NOT_GRANTED'}
+        'risk_acceptance': RISK, 'authorization': 'NOT_GRANTED',
+        **({'observation_risk_acceptance': observation.RISK,
+            'complete_current_ruleset_verification': False} if revised else {})}

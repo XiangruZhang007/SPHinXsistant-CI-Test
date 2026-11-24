@@ -14,6 +14,8 @@ FIELDS={'schema_version','kind','enabled','repository','repository_id','root_rev
     'governance_sha256','writer_environment','writer_environment_id','deployment_path','deployment_sha256',
     'permissions'}
 FILES=('src/automatic_lifecycle_policy.py','src/automatic_candidate.py','src/automatic_lifecycle.py',
+    'scripts/runtime_ruleset_observation.py',
+    'scripts/parent_authority_writer_gate.py',
     'src/derived_parent_registry.py','src/automatic_release.py','src/automatic_writer.py',
     'src/gradio_deployment_adapter.py','src/update_eligibility_gate.py','src/candidate_promotion_policy.py','scripts/automatic_lifecycle.py',
     '.github/workflows/upstream_refresh.yml','src/parent_authority_git_audit.py',
@@ -36,8 +38,10 @@ def contract(project):
 
 
 def validate(value,raw_pin,*,now=None):
-    need(isinstance(value,dict) and set(value)==FIELDS and value['schema_version']==1
-         and type(value['schema_version']) is int and value['kind']=='AUTOMATIC_LIFECYCLE_V1'
+    need(isinstance(value,dict) and type(value.get('schema_version')) is int
+         and value['schema_version'] in (1,2)
+         and set(value)==FIELDS | ({'ruleset_observation'} if value['schema_version']==2 else set())
+         and value['kind']=='AUTOMATIC_LIFECYCLE_V1'
          and value['enabled'] is True,'INVALID_AUTOMATIC_POLICY')
     need(scope._hash(raw_pin) and all(scope._hash(value[k]) for k in FIELDS
          if k.endswith('_sha256')),'INVALID_AUTOMATIC_POLICY_PIN')
@@ -80,6 +84,10 @@ def load(project,config):
     from . import upstream_provenance as source
     source._git(project,'ls-files','--error-unmatch','--',path)
     value=validate(scope._read_pinned(project,path,pin),pin)
+    if value['schema_version']==2:
+        from scripts import runtime_ruleset_observation as observation
+        observation.load(project,value,default_branch=config['default_branch'],
+            governance_sha256=value['governance_sha256'],operation='AUTOMATIC_LIFECYCLE')
     need(all(type(value[k]) is type(config[k]) and value[k]==config[k] for k in ('repository','repository_id'))
          and config['workflow_path']=='.github/workflows/upstream_refresh.yml'
          and value['root_registry_sha256']==config['registry_sha256']

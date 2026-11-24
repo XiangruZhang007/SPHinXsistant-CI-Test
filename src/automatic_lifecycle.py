@@ -67,7 +67,7 @@ def _origin(client,config,receipt):
 
 def select(project,config,policy,client,work,store):
     """Verify from protected root through every immutable admitted generation."""
-    writer.observe_rules(client,policy)
+    writer.observe_rules(client,policy,project=project)
     branch=client._api('GET','/repos/'+config['repository']+'/git/ref/heads/'+config['default_branch'])
     need(branch.get('ref')=='refs/heads/'+config['default_branch'] and branch.get('object',{}).get('sha')==config['implementation_revision'],
          'STALE_CONSUMER_IMPLEMENTATION')
@@ -149,7 +149,8 @@ def pre_token(project,work):
     assessment=assess_automatic(project,work/'delivery/run',policy,selected['candidate_id'],parent)
     need(store.head()==view['head'],'STALE_PRETOKEN_PARENT')
     result={'status':'AUTOMATIC_PRETOKEN_VERIFIED' if assessment['decision']=='APPROVED_RELEASE_ELIGIBLE' else 'QUALITY_REJECTED',
-        'assessment':assessment,'artifact':artifact,'writer_credential_access':'NOT_ATTEMPTED'}
+        'assessment':assessment,'artifact':artifact,'writer_credential_access':'NOT_ATTEMPTED',
+        **({'ruleset_observation':observed['ruleset_observation']} if policy['schema_version']==2 else {})}
     write_json(work/'result.json',result)
     return result
 
@@ -170,7 +171,8 @@ def publish_and_advance(project,work):
     need(view['generation']<policy['max_generations'],'AUTOMATIC_GENERATION_LIMIT')
     root=work/'delivery/run';verified=native.verify(project,root,policy,selected['candidate_id'],parent)
     if not verified['eligible']:
-        return {'status':'QUALITY_REJECTED','reasons':verified['report']['reasons'],'writes':'NONE'}
+        return {'status':'QUALITY_REJECTED','reasons':verified['report']['reasons'],'writes':'NONE',
+            **({'ruleset_observation':observed['ruleset_observation']} if policy['schema_version']==2 else {})}
     def revalidate():
         need(policy_api.load(project,config)==policy and writer.observe(project,config,policy,client,token=True)==observed,
              'AUTOMATIC_WRITER_CONTEXT_CHANGED')
@@ -192,4 +194,5 @@ def publish_and_advance(project,work):
              'AUTOMATIC_WRITER_CONTEXT_CHANGED')
     result=derived.advance(store,view,key,entry,receipt,protocol,repeat)
     return {**result,'release':binding,'candidate_id':verified['candidate_id'],'artifact':artifact,
-        'deployment':'SEPARATE_VERIFIED_DRIVER_REQUIRED','authoritative_root_registry':'UNCHANGED'}
+        'deployment':'SEPARATE_VERIFIED_DRIVER_REQUIRED','authoritative_root_registry':'UNCHANGED',
+        **({'ruleset_observation':observed['ruleset_observation']} if policy['schema_version']==2 else {})}

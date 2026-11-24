@@ -61,7 +61,7 @@ class GitHubRead:
 def checkout(project, revision, files):
     critical = {WORKFLOW, '.github/CODEOWNERS', 'src/hosted_parent_authority_transition.py',
                 'scripts/parent_authority_writer_prepare.py', 'scripts/parent_authority_writer_gate.py',
-                'scripts/parent_authority_writer_execute.py'}
+                'scripts/parent_authority_writer_execute.py', 'scripts/runtime_ruleset_observation.py'}
     need(isinstance(files, dict) and critical <= files.keys(), 'WRITER_CODE_MANIFEST_INCOMPLETE')
     for name, pin in files.items():
         need(isinstance(name, str) and not Path(name).is_absolute()
@@ -106,6 +106,16 @@ def verify(env, project, api):
     need(digest({'schema_version': 1, 'operation': OPERATION, 'files': files})
          == config['implementation_contract_sha256'], 'WRITER_IMPLEMENTATION_CONTRACT_MISMATCH')
     checkout(project, sha, files)
+    runtime_evidence = None
+    runtime_observation = None
+    if config.get('schema_version') == 3:
+        # Import only reviewed stdlib code after the complete checkout check.
+        sys.path.insert(0, str(PROJECT / 'scripts'))
+        import runtime_ruleset_observation as observation
+        policy = observation.manual_policy(project, config)
+        if policy['schema_version'] == 2:
+            runtime_evidence = observation.load(project, policy, default_branch=r['default_branch'],
+                governance_sha256=config['transaction_backend']['audit']['governance_sha256'], operation='MANUAL_R4')
     base = 'repos/' + REPOSITORY
     repo = api(base)
     need(repo.get('full_name') == REPOSITORY and repo.get('id') == REPOSITORY_ID
@@ -174,8 +184,12 @@ def verify(env, project, api):
     need({'deletion', 'non_fast_forward', 'pull_request'} <= types and any(
         x.get('required_approving_review_count', 0) >= 1 and x.get('require_code_owner_review') is True
         and x.get('dismiss_stale_reviews_on_push') is True for x in prs), 'TRUSTED_WORKFLOW_BRANCH_PROTECTION_REQUIRED')
-    # Effective-rule presence alone must not hide a broad admin/writer bypass.
-    for kind in ('deletion', 'non_fast_forward', 'pull_request'):
+    if runtime_evidence is not None:
+        runtime_observation = observation.observe(runtime_evidence,
+            lambda number: api(base + '/rulesets/' + str(number)))
+        observation.effective_default(runtime_evidence, rules)
+    # Legacy policies retain the complete-live bypass requirement unchanged.
+    for kind in (() if runtime_evidence is not None else ('deletion', 'non_fast_forward', 'pull_request')):
         protected = False
         for rule in (x for x in rules if x.get('type') == kind):
             number = rule.get('ruleset_id')
@@ -194,7 +208,8 @@ def verify(env, project, api):
         need(protected, 'WRITER_BRANCH_PROTECTION_BYPASS_OR_SCOPE_UNSAFE')
     return {'status': 'TRUSTED_WRITER_PRETOKEN_CONTEXT_VERIFIED', 'authorization': 'NOT_GRANTED',
         'run_id': run_id, 'run_attempt': 1, 'implementation_revision': sha,
-        'environment_id': ENVIRONMENT_ID, 'live_apply': False}
+        'environment_id': ENVIRONMENT_ID, 'live_apply': False,
+        **({'ruleset_observation': runtime_observation} if runtime_observation is not None else {})}
 
 
 def verify_token(env, api):
