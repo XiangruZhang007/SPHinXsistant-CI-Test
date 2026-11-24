@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "kind": "VERIFIED_GRADIO_DRIVER_V1",
+  "queries": [
+    "SPHinXsys documentation"
+  ],
+  "schema_version": 1,
+  "storage_root": "/tmp/ci-v2-personal-gradio-staging"
+}

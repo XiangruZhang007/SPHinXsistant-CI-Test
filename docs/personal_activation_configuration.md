@@ -36,6 +36,7 @@ approval. Existing manual Environment approval and protected integration remain.
 | `ci_v2_continuous_source_policy.json` | Official Parent only; same or fast-forward; maximum 256 commits; ends `2026-12-09T00:00:00Z` |
 | `ci_v2_scheduled_construction_policy.json` | Existing scheduled construction path bound to the prospective authorized Registry bytes; activation still disabled |
 | `ci_v2_automatic_admission_policy.json` | Existing unmodified strict requirements, frozen benchmark, both modes, 176 rows; no supplied PASS |
+| `ci_v2_automatic_deployment.json` | Existing driver settings schema with `enabled=false`; operational deployment is blocked before any driver call |
 
 Manual policy start is the actual Owner observation time today. It can be used
 as soon as the necessary review, protected merge, exact execution authorization
@@ -92,11 +93,14 @@ local review packet supplies all known policy fields, proposed seven source
 license bindings and exact prospective Registry bytes; unavailable identities
 are explicitly listed, never filled with fake hashes.
 
-Automatic `root_revision`, derived `genesis_sha`, and deployment configuration
-path/raw pin remain unbound. The existing deployment adapter has no approved
-operational driver. No professor repository, production server, xiangyullm or
-live Gradio access is allowed to manufacture those values. Lifecycle publication
-and derived advancement remain separate from operational deployment.
+Automatic `root_revision` and derived `genesis_sha` remain unbound. Deployment
+configuration uses the existing schema with `enabled=false` and a raw-byte pin;
+the existing adapter rejects operational deployment before any driver call.
+No operational driver is supplied. The existing lifecycle policy permission map
+is unchanged, but cannot override the disabled settings or missing driver.
+Hosted construction/publication/derived advancement can be reviewed separately
+from deployment. No professor repository, production server, xiangyullm or live
+Gradio access is allowed to manufacture missing identities or activate a service.
 
 ## Variables: current and proposed
 
